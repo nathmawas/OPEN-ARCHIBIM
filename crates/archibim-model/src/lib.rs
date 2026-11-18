@@ -11,4 +11,4 @@ mod wall;
 pub use opening::{Hand, NominalSize, Opening, OpeningKind, Operation, Part, Performance};
 pub use project::{Id, JunctionMode, Material, ModelError, Project};
 pub use story::{LevelKind, LevelRef, Story};
-pub use wall::{Layer, Point, RenovationStatus, Wall};
+pub use wall::{Framing, Layer, LayerRole, Point, RenovationStatus, Wall};

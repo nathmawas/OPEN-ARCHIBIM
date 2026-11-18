@@ -5,10 +5,11 @@
 //! an architect agrees them.
 
 use archibim_commands::{Command, History};
-use archibim_geometry::{LayerPlan, plan_layers, polygon_area};
+use archibim_geometry::{LayerPlan, Phase, plan_layers, polygon_area};
 use archibim_model::{
-    Hand, Id, JunctionMode, Layer, LevelKind, LevelRef, Material, NominalSize, Opening,
-    OpeningKind, Operation, Part, Performance, Point, Project, RenovationStatus, Story, Wall,
+    Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind, LevelRef, Material, NominalSize,
+    Opening, OpeningKind, Operation, Part, Performance, Point, Project, RenovationStatus, Story,
+    Wall,
 };
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -59,20 +60,26 @@ impl Fixture {
         end: (f64, f64),
         layers: &[(Id, f64)],
     ) -> std::result::Result<Id, Box<dyn std::error::Error>> {
+        let layers = layers
+            .iter()
+            .map(|&(material, thickness)| layer_of(LayerRole::LoadBearing, material, thickness))
+            .collect();
+        self.wall_with(start, end, layers)
+    }
+
+    fn wall_with(
+        &mut self,
+        start: (f64, f64),
+        end: (f64, f64),
+        layers: Vec<Layer>,
+    ) -> std::result::Result<Id, Box<dyn std::error::Error>> {
         let id = self.h.new_id();
         self.h.run(Command::AddWall(Wall {
             id,
             story: self.story0,
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
-            layers: layers
-                .iter()
-                .map(|&(material, thickness)| Layer {
-                    material,
-                    thickness,
-                    status: RenovationStatus::New,
-                })
-                .collect(),
+            layers,
             bottom: LevelRef {
                 story: self.story0,
                 kind: LevelKind::Structural,
@@ -88,7 +95,17 @@ impl Fixture {
     }
 
     fn plan(&self) -> std::result::Result<Vec<LayerPlan>, Box<dyn std::error::Error>> {
-        Ok(plan_layers(self.h.project(), self.story0)?)
+        Ok(plan_layers(self.h.project(), self.story0, Phase::Proposed)?)
+    }
+}
+
+fn layer_of(role: LayerRole, material: Id, thickness: f64) -> Layer {
+    Layer {
+        role,
+        material,
+        thickness,
+        status: RenovationStatus::New,
+        framing: None,
     }
 }
 
@@ -517,5 +534,138 @@ fn undo_and_redo_restore_the_project() -> Result {
     assert!(f.h.project().stories.is_empty());
     while f.h.redo()?.is_some() {}
     assert_eq!(f.h.project(), &end, "identifiers included");
+    Ok(())
+}
+
+#[test]
+fn walls_timber_frame_studs() -> Result {
+    let mut f = Fixture::new()?;
+    let render = f.material("render", 1)?;
+    let fibre = f.material("wood fibre board", 2)?;
+    let wool = f.material("wood wool", 2)?;
+    let timber = f.material("timber", 6)?;
+    let osb = f.material("OSB", 4)?;
+    let board = f.material("plasterboard", 1)?;
+    let studs = |spacing| Layer {
+        framing: Some(Framing {
+            material: timber,
+            width: 45.0,
+            spacing,
+        }),
+        ..layer_of(LayerRole::Insulation, wool, 145.0)
+    };
+    let build_up = |spacing| {
+        vec![
+            layer_of(LayerRole::Finish, render, 15.0),
+            layer_of(LayerRole::Insulation, fibre, 60.0),
+            studs(spacing),
+            layer_of(LayerRole::Lining, osb, 12.0),
+            layer_of(LayerRole::Lining, board, 13.0),
+        ]
+    };
+    let wall = f.wall_with((0.0, 0.0), (5000.0, 0.0), build_up(600.0))?;
+    let plan = f.plan()?;
+    let members = plan
+        .iter()
+        .find(|l| l.wall == wall && l.layer == 2)
+        .map(|l| l.members.clone())
+        .unwrap_or_default();
+    // Centres at 22.5, 622.5 ... 4822.5, plus one at the far end, 4977.5.
+    assert_eq!(members.len(), 10, "a stud at each end and every 600");
+    assert!(
+        members.iter().all(|m| close(polygon_area(m), 45.0 * 145.0)),
+        "each stud is 45 by 145"
+    );
+    let xs = |m: &Vec<Point>| m.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    assert!(close(xs(&members[0]), 0.0) && close(xs(&members[1]), 600.0));
+    assert!(
+        plan.iter()
+            .filter(|l| l.layer != 2)
+            .all(|l| l.members.is_empty()),
+        "only the insulation holds studs"
+    );
+
+    f.h.run(Command::SetWallLayers {
+        wall,
+        layers: build_up(400.0),
+    })?;
+    let plan = f.plan()?;
+    let members = plan
+        .iter()
+        .find(|l| l.wall == wall && l.layer == 2)
+        .map(|l| l.members.len())
+        .unwrap_or(0);
+    assert_eq!(
+        members, 14,
+        "redrawn every 400: 13 from the start, one at the end"
+    );
+    Ok(())
+}
+
+#[test]
+fn renovation_replace_insulation() -> Result {
+    let mut f = Fixture::new()?;
+    let stone = f.material("stone", 8)?;
+    let wool = f.material("mineral wool", 2)?;
+    let board = f.material("plasterboard", 1)?;
+    let existing = |role, material, thickness| Layer {
+        status: RenovationStatus::Existing,
+        ..layer_of(role, material, thickness)
+    };
+    let before = vec![
+        existing(LayerRole::LoadBearing, stone, 450.0),
+        existing(LayerRole::Insulation, wool, 80.0),
+        existing(LayerRole::Lining, board, 13.0),
+    ];
+    let wall = f.wall_with((0.0, 0.0), (5000.0, 0.0), before.clone())?;
+    let window = f.h.new_id();
+    f.h.run(Command::AddOpening(Opening {
+        id: window,
+        wall,
+        kind: OpeningKind::Exterior(Performance::default()),
+        position: 2000.0,
+        sill: 900.0,
+        height: 1200.0,
+        frame: 60.0,
+        parts: vec![Part {
+            width: 1000.0,
+            operation: Operation::TiltAndTurn(Hand::Left),
+        }],
+        nominal: NominalSize::ClearOpening,
+    }))?;
+
+    let mut after = before.clone();
+    after[1].status = RenovationStatus::ToDemolish;
+    after[2].status = RenovationStatus::ToDemolish;
+    after.push(layer_of(LayerRole::Insulation, wool, 120.0));
+    after.push(layer_of(LayerRole::Lining, board, 13.0));
+    f.h.run(Command::SetWallLayers {
+        wall,
+        layers: after,
+    })?;
+
+    assert_eq!(f.h.project().walls.len(), 1, "it stays one wall");
+    assert_eq!(
+        f.h.project().opening(window)?.wall,
+        wall,
+        "with the same window in it"
+    );
+    let depth = |phase| -> std::result::Result<f64, Box<dyn std::error::Error>> {
+        let plan = plan_layers(f.h.project(), f.story0, phase)?;
+        Ok(-ys(&plan
+            .iter()
+            .flat_map(|l| l.polygons.clone())
+            .collect::<Vec<_>>())
+        .0)
+    };
+    assert!(close(depth(Phase::Existing)?, 543.0), "existing state");
+    assert!(close(depth(Phase::Proposed)?, 583.0), "new state");
+
+    f.h.undo()?;
+    assert_eq!(
+        f.h.project().wall(wall)?.layers,
+        before,
+        "undo brings the build-up back"
+    );
     Ok(())
 }

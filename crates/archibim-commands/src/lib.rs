@@ -3,8 +3,8 @@
 //! and the elements it changed.
 
 use archibim_model::{
-    Id, JunctionMode, Material, ModelError, Opening, OpeningKind, Operation, Part, Project, Story,
-    Wall,
+    Id, JunctionMode, Layer, Material, ModelError, Opening, OpeningKind, Operation, Part, Project,
+    Story, Wall,
 };
 
 /// A change to the model.
@@ -38,6 +38,14 @@ pub enum Command {
     AddWall(Wall),
     /// Removes a wall with no openings.
     RemoveWall(Id),
+    /// Replaces the build-up of a wall, in place: the wall keeps its
+    /// identity, its openings and its junctions.
+    SetWallLayers {
+        /// The wall.
+        wall: Id,
+        /// The new build-up, from the left face to the right face.
+        layers: Vec<Layer>,
+    },
     /// Sets or clears how the junction between two walls is resolved.
     SetJunctionMode {
         /// One wall.
@@ -175,6 +183,12 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             }
             let wall = project.remove_wall(id)?;
             applied(AddWall(wall), vec![id])
+        }
+        SetWallLayers { wall, layers } => {
+            project.check_layers(&layers)?;
+            let w = project.wall_mut(wall)?;
+            let old = std::mem::replace(&mut w.layers, layers);
+            applied(SetWallLayers { wall, layers: old }, vec![wall])
         }
         SetJunctionMode { a, b, mode } => {
             let previous = project.set_junction_mode(a, b, mode)?;
