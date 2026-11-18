@@ -1,5 +1,7 @@
 # Windows
 
+Part of the **Openings** tool (TOOLS.md, rule 15), with doors.
+
 Status: Draft
 
 ## The need
@@ -62,10 +64,10 @@ and sills are exported as parts of the window.
 
 ## Open questions
 
-- Is joinery one tool with door and window presets, or two tools sharing
-  one model? (see [Doors](doors.md))
-
 Settled:
+
+- Doors and windows are one tool, **Openings**, interior or exterior from
+  the start.
 
 - Skylights are a tool of their own, placed in a roof: it is roofer's work,
   not joinery. Dormers get their own parametric tool too (TOOLS.md).

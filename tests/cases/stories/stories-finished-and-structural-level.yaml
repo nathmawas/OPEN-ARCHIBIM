@@ -1,0 +1,14 @@
+id: stories-finished-and-structural-level
+title: A story has a finished level and a structural level
+status: proposed
+given: |
+  Story 1 has a finished level of 3000 and a floor build-up of 80 (screed
+  and finish), so its structural level is 2920. A wall on story 0 rises to
+  the structural level of story 1. A window on story 1 has a sill height of
+  1000 from the finished level.
+when: |
+  The floor build-up of story 1 becomes 120.
+expect:
+  - The structural level of story 1 becomes 2880; its finished level stays 3000.
+  - The wall on story 0 now stops at 2880.
+  - The window sill stays at 1000 above the finished level, at 4000.

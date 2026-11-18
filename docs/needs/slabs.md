@@ -22,8 +22,8 @@ details of facades and terraces.
 
 - **Build-up**: ordered layers with material, thickness and renovation
   status, as for walls. A finish layer can change from one room to another.
-- **Level** linked to a story, with an offset; the reference can be the top
-  of the structure or the top of the finish.
+- **Level** linked to a story's finished level or structural level, with
+  an offset (see [Stories and levels](stories.md)).
 - **Openings**: stairwells and shafts, with their trimming.
 - **Edge details**, per edge:
   - edge trim or facing;
