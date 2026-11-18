@@ -340,7 +340,7 @@ architect's own comments.
 | PDF | **V1** | |
 | Point clouds | **V2** | |
 | Rhino 3D | **V2** | |
-| RFA / RVT | **V3** | |
+| RFA / RVT | **V3** | direct reading; import through an add-on comes in V2 (ROADMAP, "Leaving another tool") |
 | FBX, OBJ | **V2** | |
 | SAF | **V3** | |
 | FRILO, Artlantis | **V3** | |

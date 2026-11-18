@@ -87,8 +87,9 @@ choice.
 ### 6. Clean-room design
 
 No reverse engineering of proprietary software: no disassembly, no
-decompilation, and no reuse of a vendor's code, internal formats or object
-libraries. The project relies on **open standards** (IFC, BCF, bSDD), public
+decompilation, and no reuse of a vendor's code or object libraries. Reading
+another tool's files is allowed for one purpose only: importing a studio's
+own projects, from the study of the files themselves. The project relies on **open standards** (IFC, BCF, bSDD), public
 literature and architects' experience. Reading a product's public
 documentation to understand a need is allowed. Copying its text, interface or
 internal names is not: we describe the need in our own words. Contributions
@@ -113,8 +114,9 @@ Portuguese.
 - One-click automatic building generation.
 - A proprietary format, even "temporarily".
 - Features locked behind a payment.
-- A copy of another product's code, file formats, object libraries or
-  interface text.
+- A copy of another product's code, object libraries or interface text.
+- Writing a proprietary format. We import Revit, Archicad and Vectorworks
+  projects; we save in IFC.
 
 ## Join the project
 
