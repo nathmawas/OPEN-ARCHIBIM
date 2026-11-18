@@ -31,6 +31,8 @@ Help translate the application.
 **Clean-room rule:** no reverse engineering. Never reuse code, text or
 internal formats from proprietary software.
 
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before your first contribution.
+
 ## License
 
 [MIT](LICENSE)

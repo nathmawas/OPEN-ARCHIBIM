@@ -81,7 +81,7 @@ Goal: a readable, credible project, and a settled technical choice.
       cases
 - [ ] `PROVENANCE.md`: where each engine comes from (public specification,
       reused code and its license)
-- [ ] `CONTRIBUTING.md`: clean-room rule, "concrete gap" issue template,
+- [x] [CONTRIBUTING.md](CONTRIBUTING.md): clean-room rule, "concrete gap" issue template,
       review by an architect of every design feature, translation guide
 - [ ] 10 architects interviewed about their three biggest frustrations
 - [ ] Prototype video, launch of the funding page
