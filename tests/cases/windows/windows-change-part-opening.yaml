@@ -7,7 +7,7 @@ given: |
 when: |
   The user sets the middle part to sliding.
 expect:
-  - Only the middle part changes: it becomes a sliding sash.
+  - Only the middle part changes; it becomes a sliding sash.
   - The two fixed lights and the transom keep their sizes and settings.
   - Overall size, sill height, frame material and data are unchanged.
   - The plan and elevation symbols of the middle part show a sliding sash.
