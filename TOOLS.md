@@ -156,7 +156,9 @@ Each finding becomes a rule that applies to **every** tool.
     presets taken from building practice and standards: common door blocks
     and their clear openings, accessibility widths, usual frame and leaf
     sections, window frame profiles. Presets are data, sorted by country, and
-    reviewed by architects. A preset is a starting point: after it is
+    reviewed by architects. The first presets are French, kept as close as
+    possible to widely used models; other countries come from their own
+    communities. A preset is a starting point: after it is
     placed, the element stays fully editable (rule 15).
 
 ---
@@ -181,9 +183,11 @@ architect's own comments.
 | Roof | **V1** | redesigned: any reference plane, overhang per edge, independent layers |
 | Non-planar roof | **V1** | new |
 | Shell | **Dropped** | *"The shell becomes the roof; the two tools are unified"* — merged into Non-planar roof + Free form |
-| Skylight | **V1** | |
+| Skylight | **V1** | its own tool, placed in a roof: roofer's work, not joinery |
+| Dormer | **V1** | new: a parametric dormer placed on a roof (gable, hipped, shed, eyebrow…), with its cheeks, roof and front window; today it is either a rigid object or built by hand |
 | Stair | **V1** | helical with no angle limit |
 | Railing | **V1** | follows an edge, 3 components |
+| Fence and gate | **V2** | new: fences, palisades, gates and their posts, along a line that follows the terrain; no more railings used as fences |
 | Door | **V1** | one composable door (rule 15): leaves, side panels, fanlight |
 | Window | **V1** | one composable window (rule 15): sashes, transom, opening type per part |
 | Corner Window | **Dropped** | *"Same tool as windows"* — a window parameter |
@@ -211,6 +215,7 @@ architect's own comments.
 | Automatic dimensioning | **V2** | |
 | Text | **V1** | font per purpose |
 | Label | **V1** | |
+| Legend | **V2** | new: a layout legend built from the hatches, lines and symbols actually used in the placed drawings |
 | Fill (hatch) | **V1** | |
 | Line | **Dropped** | *"Line = polyline"* |
 | Arc / Circle | **V1** | single "Draw" tool |
@@ -288,6 +293,7 @@ architect's own comments.
 
 | Tool | Review | Notes |
 |---|---|---|
+| Country construction mode | **V3** | new: the project states the country it is built in, which sets presets, construction principles and drawing conventions; country communities maintain them |
 | Stories | **V1** | |
 | Working units | **V1** | |
 | Location, survey point | **V1** | |
@@ -395,14 +401,14 @@ architect's own comments.
 
 ## 4. V1 stages
 
-V1 holds 109 tools. It ships in five stages. Each stage ends with something an
+V1 holds 110 tools. It ships in five stages. Each stage ends with something an
 architect can try on a real project. The scope does not change, only the
 delivery order. A merged feature arrives with the tool that absorbs it.
 
 | Stage | Name | What you can do at the end | Tools |
 |---|---|---|---|
 | **V1.0** | The core | A simple house (without a roof) drawn in plan and 3D, saved and read back as IFC. | 39 |
-| **V1.1** | The complete building | The same house with roof, stairs, railings, furniture, terrain and rooms, as new build or renovation. | 14 |
+| **V1.1** | The complete building | The same house with roof, stairs, railings, furniture, terrain and rooms, as new build or renovation. | 15 |
 | **V1.2** | The drawing | Plans, sections and elevations legible without retouching: lines, hatches, texts and dimensions set once for the whole project. | 30 |
 | **V1.3** | The permit set | A complete building permit application, published as PDF and DWG. | 21 |
 | **V1.4** | Free forms | Warped roofs, sculpted volumes, curtain walls, drawn profiles. | 5 |
@@ -428,7 +434,7 @@ French)*
 The same house with roof, stairs, railings, furniture, terrain and rooms, as
 new build or renovation.
 
-Roof · Stair · Railing · Skylight · Object · Embedded library · Library
+Roof · Dormer · Stair · Railing · Skylight · Object · Embedded library · Library
 manager · Favorites · Mesh · Location, survey point · Zone · Zone categories ·
 Renovation · Multi-story editing
 
@@ -470,10 +476,10 @@ profiles
 
 | | Count |
 |---|---|
-| V1 | 109 |
-| V2 | 25 |
-| V3 | 13 |
+| V1 | 110 |
+| V2 | 27 |
+| V3 | 14 |
 | Dropped | 15 |
-| **Total** | **162** |
+| **Total** | **166** |
 
 To be discussed in the issues, tool by tool.
