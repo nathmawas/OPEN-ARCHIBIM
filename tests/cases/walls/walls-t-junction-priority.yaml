@@ -6,7 +6,9 @@ given: |
   runs straight. An internal wall (plaster 15, brick 100, plaster 15) ends
   against its inside face, at a right angle.
 expect:
-  - The external wall is not cut; all its layers stay continuous.
+  - The render, insulation and concrete of the external wall are not cut.
+  - The plaster of the external wall is interrupted where the brick passes
+    through it.
   - The brick of the internal wall stops against the concrete of the
     external wall.
   - The plaster of the internal wall stops against the plaster of the

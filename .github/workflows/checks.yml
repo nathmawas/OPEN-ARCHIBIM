@@ -48,6 +48,17 @@ jobs:
           done
           exit $fail
 
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test
+
   links:
     runs-on: ubuntu-latest
     steps:
