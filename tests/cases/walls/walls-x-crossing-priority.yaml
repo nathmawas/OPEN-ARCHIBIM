@@ -1,0 +1,14 @@
+id: walls-x-crossing-priority
+title: Two walls cross, the higher priority core passes through
+status: proposed
+given: |
+  A concrete wall (plaster 15, concrete 180, plaster 15) and a brick wall
+  (plaster 15, brick 100, plaster 15) cross each other at a right angle.
+  Concrete has a higher junction priority than brick.
+expect:
+  - The concrete wall is continuous through the crossing.
+  - The brick wall is cut on both sides of the concrete core.
+  - Plaster layers stop at the core they meet.
+questions:
+  - When both cores have the same priority, which wall passes through, and
+    can the user choose?

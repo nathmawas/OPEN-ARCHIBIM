@@ -1,0 +1,15 @@
+id: renovation-add-external-insulation
+title: External insulation added onto an existing wall
+status: proposed
+given: |
+  An existing wall: stone 450, plaster 20, all layers marked existing.
+when: |
+  The user adds two new layers on the outside: insulation 160 and
+  render 15.
+expect:
+  - It stays one wall, now 645 thick.
+  - Stone and plaster stay marked existing; insulation and render are
+    marked new.
+  - The existing-state drawing shows the wall without the new layers.
+  - The new-state drawing shows the new layers with the new-work graphics.
+  - Quantities count the new layers as new work only.

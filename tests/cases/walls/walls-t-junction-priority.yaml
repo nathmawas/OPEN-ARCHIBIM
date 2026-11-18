@@ -1,0 +1,14 @@
+id: walls-t-junction-priority
+title: T junction, the structural layer of the main wall passes through
+status: proposed
+given: |
+  An external wall (render 20, insulation 140, concrete 200, plaster 15)
+  runs straight. An internal wall (plaster 15, brick 100, plaster 15) ends
+  against its inside face, at a right angle.
+expect:
+  - The external wall is not cut; all its layers stay continuous.
+  - The brick of the internal wall stops against the concrete of the
+    external wall.
+  - The plaster of the internal wall stops against the plaster of the
+    external wall.
+  - The internal wall never cuts into the insulation or the render.

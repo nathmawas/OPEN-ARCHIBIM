@@ -1,0 +1,11 @@
+id: walls-l-corner-same-build-up
+title: L corner between two identical walls
+status: proposed
+given: |
+  Two walls meet at a right angle, end to end. Both have the same
+  build-up: render 20, insulation 140, concrete 200, plaster 15.
+expect:
+  - Each layer joins the same layer of the other wall (concrete to concrete,
+    insulation to insulation, render to render, plaster to plaster).
+  - The insulation is continuous around the outside corner, with no gap.
+  - No layer overlaps another layer in plan.
