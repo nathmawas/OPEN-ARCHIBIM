@@ -50,12 +50,13 @@ The durations assume a **core team**:
 - **1 half-time architect**, who settles design questions and tests each
   stage.
 
-They change a lot with resources and with the technical choice:
+They also assume we write our own building model and reuse open libraries
+for the rest (see "Technical approach" below). They change a lot with
+resources:
 
 | Situation | Effect on V1 (V1.0 → V1.4) |
 |---|---|
-| Core team, our own kernel (options A or B) | ≈ 19 months, as above |
-| Core team, building on `bimcraft-core` (option D) | ≈ 13 to 15 months: walls, views, sheets and IFC already exist |
+| Core team | ≈ 19 months, as above |
 | A single developer | × 2 to × 3: 3 to 4 years |
 | 4 developers or more | ≈ 12 months at best: coordination limits the gain |
 
@@ -72,8 +73,9 @@ Goal: a readable, credible project, and a settled technical choice.
 - [x] Manifesto
 - [x] Tool review: [TOOLS.md](TOOLS.md) (findings, design rules, review of
       162 tools, V1 stages)
-- [ ] **Two-week prototype** on options D and B (see below), then the
-      technical decision
+- [ ] **Two-week prototype** of our own core (see "Technical approach"):
+      stories, a composite wall with junction priorities, one composable
+      window; then the choice of stack and libraries
 - [ ] **Needs map**: for each tool family, a sheet written **in our own
       words** (the need, today's problem, what we drop), fed by real studio
       cases
@@ -84,7 +86,7 @@ Goal: a readable, credible project, and a settled technical choice.
 - [ ] 10 architects interviewed about their three biggest frustrations
 - [ ] Prototype video, launch of the funding page
 
-**Deliverable:** a documented public repository, the technical decision, and
+**Deliverable:** a documented public repository, the chosen stack, and
 a first call for contributors and funding.
 
 ## V1.0 — The core *(4 months)*
@@ -150,29 +152,33 @@ point clouds, Rhino…: the 13 V3 tools.
 
 ---
 
-## Technical decision to make
+## Technical approach
 
-| Option | For | Against |
-|---|---|---|
-| **A. Rust application (egui/wgpu) + our own IFC kernel** | Full control, performance, a single code base | The longest: the whole geometry and IFC kernel to write |
-| **B. Build on IfcOpenShell (C++/Python)** | Mature, proven IFC kernel, geometry available | Interface and ergonomics entirely to build; mixed languages |
-| **C. Contribute to Bonsai (Blender + IfcOpenShell)** | Existing ecosystem, active community | Ergonomics tied to Blender, which is not designed for architects |
-| **D. Build on `bimcraft-core` (BIMCraft, Rust, MIT/Apache)** | UI-less Rust core, already rich: wall junctions, plans, sections, sheets, PDF, schedules, IFC; compatible license | Data model shaped after Revit (families, view templates); very young project, very fast code pace, one main maintainer |
+**Our own building model, the best open components underneath.**
 
-**Provisional recommendation: test D and B in parallel.** We should not
-rewrite what already exists under an open license. The effort belongs where
-something is truly missing: the studio way of working and 2D drawing. The
-two-week prototype of Stage 0 must answer one question: can we put
-**stories**, **composite walls with junction priorities** and **renovation
-status** on top of this core without bending it? If yes, D. If not, B.
+We do not adopt another product's model. The building model is ours and
+thinks like an architect: stories, composite walls with junction priorities,
+parametric elements built from parts (TOOLS.md, rule 15), renovation status
+per layer, one view style. This is where the project's value lies, so we
+write it ourselves.
+
+Underneath, we reuse the best open libraries for what does not make the
+difference: reading and writing IFC, geometry and Boolean operations, PDF and
+DWG output, 3D display. Each one is picked on its merits, kept behind our own
+interface so it can be replaced, and recorded in `PROVENANCE.md`.
+
+The two-week prototype of Stage 0 builds three things on a candidate stack:
+**stories**, **a composite wall with junction priorities** and **one
+composable window**. It settles the stack (language, UI toolkit) and the
+first libraries.
 
 ## Related projects
 
 | Project | What it is | What we take from it |
 |---|---|---|
-| [BIMCraft](https://github.com/IPedrax/BIMCraft) | Open take on the Revit workflow, in Rust (MIT/Apache-2.0), drivable by agents (MCP) | Its UI-less core is reusable (option D). Its "every action is a command" architecture gives undo, scripting and tests for free. |
+| [BIMCraft](https://github.com/IPedrax/BIMCraft) | Open take on the Revit workflow, in Rust (MIT/Apache-2.0), drivable by agents (MCP) | Its "every action is a command" architecture gives undo, scripting and tests for free. Some of its libraries may be reused where its license allows. |
 | [BimCraft (CadCraft)](https://github.com/getcadcraft/bimcraft) | Web BIM application in JavaScript (Apache-2.0), by a company; the names are trademarks | Its `PROVENANCE.md` is the model to follow: each engine states which public specification it comes from, and GPL tools are only used as test oracles. |
-| [Bonsai / IfcOpenShell](https://ifcopenshell.org) | Reference open-source IFC kernel | The oracle that validates our IFC files, whatever the technical choice. |
+| [Bonsai / IfcOpenShell](https://ifcopenshell.org) | Reference open-source IFC kernel | The oracle that validates our IFC files, and a candidate IFC library. |
 
 We learn from them and reuse their code when the license allows it, keeping
 their notices (`NOTICE`). We take neither their names nor their Revit-shaped
