@@ -180,6 +180,17 @@ Each finding becomes a rule that applies to **every** tool.
     element, so an opening still crosses one single wall. Detail scales
     draw what the build-up implies (overlapping tiles, battens, fixings)
     without modelling it in 3D.
+19. **Everything can be found by typing.** Commands can be typed, as in a
+    command line, but nobody has to know them by heart: typing searches.
+    The search finds tools, commands and parameters by name, by short alias
+    and by trade synonym (guard rail, balustrade), all from the language
+    packs. With an element selected, the search looks first at what that
+    element owns: its parts, its options and the transformations it
+    accepts. Typing "casing" on a selected door finds the door's casing and
+    offers what can be done to it (edit, remove, replace). This needs every
+    part and every option of an element to have a name and its actions:
+    nothing is an anonymous setting. The result is instant, works offline
+    and is always the same for the same words.
 
 ---
 
