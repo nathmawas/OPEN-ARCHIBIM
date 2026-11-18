@@ -21,10 +21,19 @@ Rules (see [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ## Libraries
 
-None yet. The Stage 0 prototype chooses the first ones.
+Chosen by the Stage 0 prototype (ADR 0007).
 
 | Library | Version | License | Origin | Used for | Shipped |
 |---|---|---|---|---|---|
+| egui | 0.37 | MIT OR Apache-2.0 | crates.io, emilk/egui | widgets and the plan view (`archibim-ui`) | yes |
+| eframe | 0.37 | MIT OR Apache-2.0 | crates.io, emilk/egui | the application window (`archibim-app`) | yes |
+| wgpu | through eframe | MIT OR Apache-2.0 | crates.io, gfx-rs/wgpu | GPU drawing | yes |
+
+These bring about 170 crates, all under permissive licenses (MIT, Apache-2.0,
+BSD, ISC, Zlib, Unicode-3.0). The default fonts of egui are under the SIL
+Open Font License and the Ubuntu Font Licence. One crate is offered under
+"Apache-2.0 OR GPL-2.0-only": we use it under Apache-2.0. List them with
+`cargo tree -p archibim-app -e normal -f "{p} {l}"`.
 
 ## Test oracles
 
