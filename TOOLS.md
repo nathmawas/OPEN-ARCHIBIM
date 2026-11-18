@@ -145,6 +145,19 @@ Each finding becomes a rule that applies to **every** tool.
     gains a glazed side panel keeps its sizes, materials, frame and data.
     The same applies to stairs, railings and curtain walls: the element
     stays the same, only its parts change.
+16. **An element carries its architectural details.** What an architect
+    draws as part of an element is an option of that element, not a separate
+    object added against it. A wall can have a skirting or a cornice; a roof
+    has its gutter, fascia and eaves; a stair has its railing and stringers;
+    a window has its sill. Using one element to fake another (a thin wall as
+    a skirting) is never needed, so it never creates clashes or junction
+    problems.
+17. **Standard sizes come ready to use.** Each parametric tool ships with
+    presets taken from building practice and standards: common door blocks
+    and their clear openings, accessibility widths, usual frame and leaf
+    sections, window frame profiles. Presets are data, sorted by country, and
+    reviewed by architects. A preset is a starting point: after it is
+    placed, the element stays fully editable (rule 15).
 
 ---
 

@@ -1,0 +1,14 @@
+id: walls-equal-priority-junction
+title: Equal priorities meet on a mitre, unless the user picks a wall
+status: proposed
+given: |
+  Two walls with the same build-up (plaster 15, brick 200, plaster 15),
+  so every layer has the same junction priority, meet at a junction.
+expect:
+  - By default, the layers of equal priority meet on a mitre (a cut on the
+    bisector of the angle), with no wall passing in front.
+  - When the user draws or edits the junction, they can choose which wall
+    passes in front instead of the mitre.
+  - The choice is stored on that junction only; other junctions keep their
+    own setting.
+  - The user can switch the junction back to the mitre at any time.
