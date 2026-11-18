@@ -165,6 +165,21 @@ Each finding becomes a rule that applies to **every** tool.
     possible to widely used models; other countries come from their own
     communities. A preset is a starting point: after it is
     placed, the element stays fully editable (rule 15).
+18. **The build-up belongs to the element, described the way it is
+    built.** There is no catalogue of fixed composites to pick from: a wall,
+    a slab or a roof carries its build-up as its own parameters, started
+    from a preset and edited in place (change a thickness without touching
+    any shared setting). Each layer has a constructive role: load-bearing,
+    insulation, air gap, membrane, lining, finish, covering. A layer can
+    hold framing within its thickness (timber studs in the insulation),
+    shown in plan. A system brings the layers it implies: tiles bring
+    battens, zinc brings boarding, a timber roof brings rafters, purlins
+    and trusses. A slab is one element whose floor finish can change from
+    room to room. Renovation works layer by layer: the old insulation is
+    marked for demolition and the new one appears as new work, in the same
+    element, so an opening still crosses one single wall. Detail scales
+    draw what the build-up implies (overlapping tiles, battens, fixings)
+    without modelling it in 3D.
 
 ---
 
@@ -180,7 +195,7 @@ architect's own comments.
 
 | Tool | Review | Notes |
 |---|---|---|
-| Wall | **V1** | composite + junction priorities |
+| Wall | **V1** | build-up as a parameter of the wall (rule 18) + junction priorities |
 | Curtain Wall | **V1** | |
 | Column | **V1** | |
 | Beam | **V1** | |
@@ -273,7 +288,7 @@ architect's own comments.
 | Fill patterns | **V1** | |
 | Building materials | **V1** | *"Ideally materials and surfaces are set in the same place"* — one single material |
 | Surfaces (3D) | **V1** | merged into Material |
-| Composites | **V1** | |
+| Composites | **V1** | merged: no catalogue of composites; the build-up is a parameter of each wall, slab and roof, started from presets (rule 18) |
 | Complex profiles | **V1** | |
 | Pen sets | **V1** | merged: named line weights |
 | Attribute manager | **V2** | |

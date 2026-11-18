@@ -20,11 +20,14 @@ details of facades and terraces.
 
 ## Parts and details
 
-- **Build-up**: ordered layers with material, thickness and renovation
-  status, as for walls. A finish layer can change from one room to another.
+- **Build-up**, owned by the slab (TOOLS.md, rule 18): ordered layers with
+  role, material, thickness and renovation status, as for walls; joists as
+  framing for timber floors.
+- **Floor finish**: an option of the slab. The slab is one element; its
+  finish can change from one room to another.
 - **Level** linked to a story's finished level or structural level, with
   an offset (see [Stories and levels](stories.md)).
-- **Openings**: stairwells and shafts, with their trimming.
+- **Voids**: stairwells and shafts, with their trimming.
 - **Edge details**, per edge:
   - edge trim or facing;
   - drip;
@@ -54,6 +57,4 @@ story, with explicit geometry. Openings are standard IFC openings.
 
 ## Open questions
 
-- Does a finish layer that changes per room belong to the slab or to the
-  room?
 - Are sloped slabs in V1.0 or with roofs in V1.1?

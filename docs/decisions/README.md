@@ -11,6 +11,7 @@ the old one.
 | [0003](0003-gpu-incremental-rendering.md) | GPU rendering, recompute only what changed | Proposed |
 | [0004](0004-own-icon-catalogue.md) | Our own icon and symbol catalogue | Accepted |
 | [0005](0005-object-library.md) | Object library: parametric tools, presets and open content | Accepted |
+| [0006](0006-constructive-build-ups.md) | Constructive build-ups, owned by each element | Accepted |
 
 ## Format
 

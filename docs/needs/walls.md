@@ -21,8 +21,14 @@ and the renovation drawings.
 
 ## Parts and details
 
-- **Build-up**: ordered layers, each with a material, a thickness and a
-  renovation status (existing, to be demolished, new).
+- **Build-up**, owned by the wall (TOOLS.md, rule 18): ordered layers, each
+  with a constructive role (load-bearing, insulation, air gap, membrane,
+  lining, finish), a material, a thickness and a renovation status
+  (existing, to be demolished, new). Started from a preset such as
+  "traditional masonry with plasterboard lining on insulation" or "timber
+  frame", then edited in place.
+- **Framing** within a layer: studs of a timber frame wall in its
+  insulation, with width and spacing, drawn in plan.
 - **Junctions** driven by material priority; equal priorities meet on a
   mitre unless the user picks the wall in front, per junction.
 - **Top and bottom** linked to a story or set to a fixed level, with an
@@ -37,8 +43,9 @@ and the renovation drawings.
 
 ## Presets
 
-- Common build-ups by country: masonry, concrete, timber frame, partition
-  types, each with usual thicknesses.
+- Common build-ups by country, as wall presets: masonry with internal or
+  external insulation, concrete, timber frame, partition types, each with
+  usual thicknesses.
 - Usual skirting, cornice and coping profiles.
 
 ## Drawing

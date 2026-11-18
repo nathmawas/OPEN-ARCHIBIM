@@ -9,6 +9,7 @@ test cases in [tests/cases](../../tests/cases/README.md) and the presets.
 | [Stories and levels](stories.md) | Draft |
 | [Walls](walls.md) | Draft |
 | [Slabs](slabs.md) | Draft |
+| [Roofs](roofs.md) | Draft |
 | [Doors](doors.md) (Openings) | Draft |
 | [Windows](windows.md) (Openings) | Draft |
 
