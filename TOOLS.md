@@ -137,7 +137,12 @@ Each finding becomes a rule that applies to **every** tool.
     first packs are English, French, Spanish, Italian, German and Portuguese.
     Units, number formats and drawing conventions follow the project's
     country, not the interface language.
-15. **One parametric tool per element, built from parts.** There is no
+15. **Openings: one parametric tool for doors and windows, built from parts.**
+    Doors and windows are one tool, **Openings**, split from the start into
+    **interior** and **exterior** openings: they do not have the same
+    performance targets (an interior glazed screen or a room door is far
+    simpler than a window or an entrance door).
+    **One parametric tool per element, built from parts.** There is no
     catalogue of door and window objects to choose from. There is one
     window, and you compose it: add a sash, a transom or a side panel,
     change how each part opens (side-hung, tilt-and-turn, sliding, fixed).
@@ -188,8 +193,8 @@ architect's own comments.
 | Stair | **V1** | helical with no angle limit |
 | Railing | **V1** | follows an edge, 3 components |
 | Fence and gate | **V2** | new: fences, palisades, gates and their posts, along a line that follows the terrain; no more railings used as fences |
-| Door | **V1** | one composable door (rule 15): leaves, side panels, fanlight |
-| Window | **V1** | one composable window (rule 15): sashes, transom, opening type per part |
+| Door | **V1** | merged into the **Openings** tool (rule 15): leaves, side panels, fanlight |
+| Window | **V1** | merged into the **Openings** tool (rule 15): sashes, transom, opening type per part |
 | Corner Window | **Dropped** | *"Same tool as windows"* — a window parameter |
 | Wall End | **V2** | |
 | Object | **V1** | linked component, 3 representations |
@@ -197,7 +202,7 @@ architect's own comments.
 | Zone | **V1** | |
 | Mesh | **V1** | terrain from a land survey |
 | Morph | **V1** | |
-| Opening | **V1** | one tool for walls, slabs and roofs |
+| Opening | **V1** | renamed **Void** (holes in walls, slabs and roofs), so that "Openings" means doors and windows |
 | TrussMaker | **V3** | |
 | Solid Element Operations | **V1** | merged: Booleans in Free form |
 | Library Part Maker | **V3** | |

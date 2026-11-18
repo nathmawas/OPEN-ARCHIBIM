@@ -1,0 +1,14 @@
+id: openings-interior-exterior
+title: An opening is interior or exterior from the start
+status: proposed
+given: |
+  The user places an opening in an internal partition, then another in an
+  external wall.
+expect:
+  - Each opening is chosen as interior or exterior when it is placed.
+  - An interior opening offers only what it needs (glazed screen, room
+    door) and no thermal or airtightness performance.
+  - An exterior opening carries performance data (thermal, airtightness,
+    acoustic, security) and the details around it (sill, shutters).
+  - Changing an opening from interior to exterior keeps its sizes and its
+    parts.

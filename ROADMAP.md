@@ -100,8 +100,9 @@ a first call for contributors and funding.
 A simple house (without a roof) drawn in plan and 3D, saved and read back as
 IFC. This is also where the foundations of everything else are laid:
 
-- stories, grids, composite walls with **junctions driven by material
-  priority**, slabs, doors, windows, openings, columns, beams;
+- stories with a **finished and a structural level**, grids, composite walls with **junctions driven by material
+  priority**, slabs, **openings** (doors and windows, interior or exterior), voids,
+  columns, beams;
 - **linked types and instances**, one single material definition;
 - **synchronised windows** for plan and 3D;
 - **command line** and **MCP server**: every action is a command;

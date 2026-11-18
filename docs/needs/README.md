@@ -6,10 +6,11 @@ test cases in [tests/cases](../../tests/cases/README.md) and the presets.
 
 | Sheet | Status |
 |---|---|
+| [Stories and levels](stories.md) | Draft |
 | [Walls](walls.md) | Draft |
 | [Slabs](slabs.md) | Draft |
-| [Doors](doors.md) | Draft |
-| [Windows](windows.md) | Draft |
+| [Doors](doors.md) (Openings) | Draft |
+| [Windows](windows.md) (Openings) | Draft |
 
 ## How a sheet is built
 
