@@ -9,6 +9,7 @@ open your own work, and AI is never forced on you.
 - 📜 [Manifesto](MANIFESTO.md): why, and on which principles
 - 🗺️ [Roadmap](ROADMAP.md): what we build, in which order, and how long it takes
 - 🧰 [Tools](TOOLS.md): what we keep, what we simplify, what we drop
+- 🏗️ [Architecture](ARCHITECTURE.md): how the software is built, and why
 
 ## Status
 
