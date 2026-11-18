@@ -17,8 +17,9 @@ Meanwhile, basic gaps remain:
 - IFC exchanges that lose information;
 - a model that cannot be read, checked or reused outside the software.
 
-OPEN-ARCHIBIM starts from a blank page. We do not copy existing software. We
-lay down again the foundations of what an architect really needs.
+OPEN-ARCHIBIM takes the best ideas of the tools architects already use,
+keeps what works, simplifies it deeply, and writes it all anew. We lay down
+again the foundations of what an architect really needs.
 
 ## Not another Revit clone
 
@@ -33,6 +34,9 @@ multi-discipline teams. OPEN-ARCHIBIM goes the opposite way, the way of the
   priorities, not manual fixes;
 - **2D is a first-class citizen.** You draw freely over the model, as on
   tracing paper, without having to model everything;
+- **elements are parametric and built from parts.** One window, not a
+  catalogue: add a sash, a transom or a side panel, change how each part
+  opens, and every other property is kept;
 - **the existing building is part of the project.** Renovation is the common
   case, not an option: every element is existing, to be demolished, or new;
 - **you learn the tool in a week**, not in a three-month training course.
@@ -109,7 +113,8 @@ Portuguese.
 - One-click automatic building generation.
 - A proprietary format, even "temporarily".
 - Features locked behind a payment.
-- A copy of the interface or behaviour of existing software.
+- A copy of another product's code, file formats, object libraries or
+  interface text.
 
 ## Join the project
 

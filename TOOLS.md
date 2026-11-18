@@ -33,6 +33,9 @@ The list stays open: propose each new finding as an issue.
 - Repeated objects are not linked. Editing one instance does not change the
   others, and editing a favorite changes none of the objects already placed.
 - Wall intersections and overlapping objects behave unpredictably.
+- Doors and windows come as a catalogue of separate objects. Adding a glazed
+  side panel to a door means starting again from another object and trying
+  to carry the old properties over.
 
 **Roofs**
 - The reference plane is always the underside.
@@ -134,6 +137,14 @@ Each finding becomes a rule that applies to **every** tool.
     first packs are English, French, Spanish, Italian, German and Portuguese.
     Units, number formats and drawing conventions follow the project's
     country, not the interface language.
+15. **One parametric tool per element, built from parts.** There is no
+    catalogue of door and window objects to choose from. There is one
+    window, and you compose it: add a sash, a transom or a side panel,
+    change how each part opens (side-hung, tilt-and-turn, sliding, fixed).
+    Changing the composition never resets the other properties: a door that
+    gains a glazed side panel keeps its sizes, materials, frame and data.
+    The same applies to stairs, railings and curtain walls: the element
+    stays the same, only its parts change.
 
 ---
 
@@ -160,8 +171,8 @@ architect's own comments.
 | Skylight | **V1** | |
 | Stair | **V1** | helical with no angle limit |
 | Railing | **V1** | follows an edge, 3 components |
-| Door | **V1** | |
-| Window | **V1** | |
+| Door | **V1** | one composable door (rule 15): leaves, side panels, fanlight |
+| Window | **V1** | one composable window (rule 15): sashes, transom, opening type per part |
 | Corner Window | **Dropped** | *"Same tool as windows"* — a window parameter |
 | Wall End | **V2** | |
 | Object | **V1** | linked component, 3 representations |

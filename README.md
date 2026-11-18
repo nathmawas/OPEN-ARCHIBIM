@@ -25,7 +25,7 @@ welcome.
 
 Are you an architect? Open an issue that describes **one concrete gap** in the
 tool you use today, with a real case. Are you a developer? Read the roadmap,
-especially the technical decision still to be made. Speak another language?
+especially the technical approach. Speak another language?
 Help translate the application.
 
 **Clean-room rule:** no reverse engineering. Never reuse code, text or
