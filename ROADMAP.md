@@ -13,7 +13,7 @@ Guiding principles: see [MANIFESTO.md](MANIFESTO.md).
 |---|---|---|---|---|
 | **0. Foundations** | Watch a prototype video, read the project, contribute | — | 2 months | Dec 2026 → Jan 2027 |
 | **V1.0 The core** | Draw a simple house in plan and 3D, exchange it as IFC | 39 | 4 months | Feb → May 2027 |
-| **V1.1 The complete building** | Roof, dormers, stairs, railings, furniture, terrain, rooms, renovation | 15 | 4 months | Jun → Sep 2027 |
+| **V1.1 The complete building** | Roof, dormers, mouldings, stairs, railings, furniture, terrain, rooms, renovation | 16 | 4 months | Jun → Sep 2027 |
 | **V1.2 The drawing** | Plans, sections and elevations legible without retouching | 30 | 3 months | Oct → Dec 2027 |
 | **V1.3 The permit set** | Submit a real building permit application, published as PDF and DWG | 21 | 3 months | Jan → Mar 2028 |
 | **V1.4 Free forms** | Warped roofs, sculpted volumes, curtain walls | 5 | 3 months | Apr → Jun 2028 |
@@ -72,7 +72,7 @@ Goal: a readable, credible project, and a settled technical choice.
 - [x] MIT license
 - [x] Manifesto
 - [x] Tool review: [TOOLS.md](TOOLS.md) (findings, design rules, review of
-      166 tools, V1 stages)
+      167 tools, V1 stages)
 - [ ] **Two-week prototype** of our own core (see "Technical approach"):
       stories, a composite wall with junction priorities, one composable
       window; then the choice of interface toolkit and libraries
@@ -115,7 +115,7 @@ IFC. This is also where the foundations of everything else are laid:
 ## V1.1 — The complete building *(4 months)*
 
 A redesigned roof (any reference plane, overhang set edge by edge,
-independent layers), **parametric dormers**, stairs (helical with no angle limit), railings, objects
+independent layers), **parametric dormers**, **mouldings** on façades (string courses, cornices, surrounds), stairs (helical with no angle limit), railings, objects
 and furniture, terrain, rooms and areas, and **layer-based renovation**
 (external insulation added onto the existing wall).
 
