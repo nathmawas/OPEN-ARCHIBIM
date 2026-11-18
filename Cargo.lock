@@ -125,6 +125,7 @@ version = "0.1.0"
 name = "archibim-ui"
 version = "0.1.0"
 dependencies = [
+ "archibim-commands",
  "archibim-geometry",
  "archibim-model",
  "egui",
