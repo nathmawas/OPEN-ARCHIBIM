@@ -1,0 +1,17 @@
+id: windows-nominal-size-reference
+title: The user chooses which size of a door or window is the nominal one
+status: proposed
+given: |
+  A door whose sizes can be read at several places: the wall opening, the
+  outside of the frame, the clear opening inside the frame, and the leaf.
+when: |
+  The user sets the clear opening inside the frame as the nominal size,
+  900 x 2100, then changes the frame section.
+expect:
+  - The user can pick the nominal size among wall opening, frame outside,
+    clear opening and leaf, for width and height.
+  - The nominal size stays 900 x 2100; the other sizes are recalculated
+    from it and shown, read only.
+  - The nominal size is the one used in labels and schedules.
+  - Casings (architraves) are set per face, inside and outside, with their
+    own widths, and do not change the nominal size.

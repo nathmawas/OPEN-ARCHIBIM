@@ -11,6 +11,7 @@ expect:
   - The leaf stays 900 x 2150, opening to the right.
   - Frame material and section, threshold and all data are unchanged.
   - The side panel uses the same frame material and section by default.
-questions:
-  - Does the opening in the wall grow by the panel width (1300 total), or
-    does the panel come out of a fixed total width?
+  - By default the opening in the wall grows by the width of the panel and
+    its frame.
+  - If the user has fixed the overall size of the element instead, the
+    panel is taken from that size and the user is told which part shrinks.

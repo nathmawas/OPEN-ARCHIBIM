@@ -9,6 +9,3 @@ expect:
   - The concrete wall is continuous through the crossing.
   - The brick wall is cut on both sides of the concrete core.
   - Plaster layers stop at the core they meet.
-questions:
-  - When both cores have the same priority, which wall passes through, and
-    can the user choose?
