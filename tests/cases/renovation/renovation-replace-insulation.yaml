@@ -1,0 +1,16 @@
+id: renovation-replace-insulation
+title: Replacing the internal insulation of an existing wall
+status: proposed
+given: |
+  An existing wall with a window: stone 450, insulation 80, plasterboard
+  13, all existing.
+when: |
+  The user marks the insulation and the plasterboard to be demolished and
+  adds new insulation 120 and new plasterboard 13.
+expect:
+  - It stays one wall, with the same window in it.
+  - The existing-state drawing shows stone, old insulation and old
+    plasterboard, 543 thick.
+  - The new-state drawing shows stone, new insulation and new plasterboard,
+    583 thick.
+  - Undo brings back the previous build-up.

@@ -2,7 +2,27 @@
 //!
 //! Pure functions: nothing here keeps state or draws.
 
-use archibim_model::{Id, JunctionMode, ModelError, Point, Project, Wall};
+use archibim_model::{
+    Framing, Id, JunctionMode, ModelError, Point, Project, RenovationStatus, Wall,
+};
+
+/// Which state of the building to draw (renovation filter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// The building before works: existing layers and layers to demolish.
+    Existing,
+    /// The building after works: existing layers and new layers.
+    Proposed,
+}
+
+impl Phase {
+    fn shows(self, status: RenovationStatus) -> bool {
+        match self {
+            Self::Existing => status != RenovationStatus::New,
+            Self::Proposed => status != RenovationStatus::ToDemolish,
+        }
+    }
+}
 
 /// Two points closer than this are the same point, in millimetres.
 const TOL: f64 = 1.0;
@@ -17,6 +37,9 @@ pub struct LayerPlan {
     pub layer: usize,
     /// The pieces of the layer, each a closed polygon.
     pub polygons: Vec<Vec<Point>>,
+    /// The framing members within the layer (studs, joists), each a closed
+    /// polygon drawn over the layer.
+    pub members: Vec<Vec<Point>>,
 }
 
 /// The plan shapes of every wall layer of a story, with junctions resolved.
@@ -30,10 +53,14 @@ pub struct LayerPlan {
 ///   continuous; the other stops on both sides as above.
 // ponytail: recomputes the whole story; recompute only changed walls and
 // their neighbours when the performance budget needs it (ADR 0003).
-pub fn plan_layers(project: &Project, story: Id) -> Result<Vec<LayerPlan>, ModelError> {
+pub fn plan_layers(
+    project: &Project,
+    story: Id,
+    phase: Phase,
+) -> Result<Vec<LayerPlan>, ModelError> {
     let mut states = Vec::new();
     for wall in project.walls.iter().filter(|w| w.story == story) {
-        states.push(WallState::new(project, wall)?);
+        states.push(WallState::new(project, wall, phase)?);
     }
     for i in 0..states.len() {
         for j in i + 1..states.len() {
@@ -44,11 +71,15 @@ pub fn plan_layers(project: &Project, story: Id) -> Result<Vec<LayerPlan>, Model
     Ok(states
         .iter()
         .flat_map(|s| {
-            s.bands.iter().enumerate().map(|(layer, band)| LayerPlan {
-                wall: s.id,
-                layer,
-                polygons: band.pieces(&s.frame),
-            })
+            s.bands
+                .iter()
+                .zip(&s.layer_index)
+                .map(|(band, &layer)| LayerPlan {
+                    wall: s.id,
+                    layer,
+                    polygons: band.pieces(&s.frame),
+                    members: band.members(&s.frame),
+                })
         })
         .collect())
 }
@@ -151,10 +182,13 @@ struct Band {
     start: Line,
     end: Line,
     gaps: Vec<(Line, Line)>,
+    framing: Option<Framing>,
 }
 
 impl Band {
-    fn pieces(&self, frame: &Frame) -> Vec<Vec<Point>> {
+    /// The cut lines bounding each piece of the band, in order along the
+    /// wall.
+    fn cut_pairs(&self, frame: &Frame) -> Vec<(Line, Line)> {
         let at = |cut: Line| intersect(self.mid, cut).map(|p| frame.t(p));
         let mut gaps: Vec<(f64, Line, Line)> = self
             .gaps
@@ -170,16 +204,64 @@ impl Band {
             cuts.extend([enter, exit]);
         }
         cuts.push(self.end);
-        cuts.chunks(2)
-            .filter_map(|c| {
-                let quad = vec![
-                    intersect(self.lo, c[0])?,
-                    intersect(self.lo, c[1])?,
-                    intersect(self.hi, c[1])?,
-                    intersect(self.hi, c[0])?,
-                ];
-                (polygon_area(&quad) > TOL).then_some(quad)
+        cuts.chunks(2).map(|c| (c[0], c[1])).collect()
+    }
+
+    fn quad(&self, a: Line, b: Line) -> Option<Vec<Point>> {
+        let quad = vec![
+            intersect(self.lo, a)?,
+            intersect(self.lo, b)?,
+            intersect(self.hi, b)?,
+            intersect(self.hi, a)?,
+        ];
+        (polygon_area(&quad) > TOL).then_some(quad)
+    }
+
+    fn pieces(&self, frame: &Frame) -> Vec<Vec<Point>> {
+        self.cut_pairs(frame)
+            .into_iter()
+            .filter_map(|(a, b)| self.quad(a, b))
+            .collect()
+    }
+
+    /// Framing members: one at each end of the wall and one every `spacing`
+    /// from the start, kept only where they fit inside a piece of the layer.
+    fn members(&self, frame: &Frame) -> Vec<Vec<Point>> {
+        let Some(f) = self.framing else {
+            return Vec::new();
+        };
+        let half = f.width / 2.0;
+        let at = |cut: Line| intersect(self.mid, cut).map(|p| frame.t(p));
+        let ranges: Vec<(f64, f64)> = self
+            .cut_pairs(frame)
+            .into_iter()
+            .filter_map(|(a, b)| {
+                let (ta, tb) = (at(a)?, at(b)?);
+                Some((ta.min(tb), ta.max(tb)))
             })
+            .collect();
+        let mut centres = Vec::new();
+        let mut c = half;
+        while c <= frame.len - half + 1e-9 {
+            centres.push(c);
+            c += f.spacing;
+        }
+        let last = frame.len - half;
+        if centres.last().is_some_and(|&c| last - c >= f.width) {
+            centres.push(last);
+        }
+        let across = |t: f64| Line {
+            p: add(frame.start, mul(frame.d, t)),
+            d: frame.r,
+        };
+        centres
+            .into_iter()
+            .filter(|&c| {
+                ranges
+                    .iter()
+                    .any(|&(a, b)| c - half >= a - TOL && c + half <= b + TOL)
+            })
+            .filter_map(|c| self.quad(across(c - half), across(c + half)))
             .collect()
     }
 }
@@ -195,16 +277,25 @@ struct WallState {
     frame: Frame,
     priorities: Vec<u8>,
     bands: Vec<Band>,
+    /// Index in the wall's build-up of each band.
+    layer_index: Vec<usize>,
 }
 
 impl WallState {
-    fn new(project: &Project, wall: &Wall) -> Result<Self, ModelError> {
+    fn new(project: &Project, wall: &Wall, phase: Phase) -> Result<Self, ModelError> {
         let d =
             unit(sub(wall.end, wall.start)).ok_or(ModelError::Invalid("a wall has no length"))?;
         let r = Point::new(d.y, -d.x);
         let mut offsets = vec![0.0];
         let mut priorities = Vec::new();
-        for layer in &wall.layers {
+        let (layer_index, shown): (Vec<usize>, Vec<&archibim_model::Layer>) = wall
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| phase.shows(l.status))
+            .unzip();
+        let framings: Vec<Option<Framing>> = shown.iter().map(|l| l.framing).collect();
+        for layer in &shown {
             offsets.push(offsets[offsets.len() - 1] + layer.thickness);
             priorities.push(project.material(layer.material)?.priority);
         }
@@ -216,7 +307,7 @@ impl WallState {
             len: length(sub(wall.end, wall.start)),
             offsets,
         };
-        let bands = (0..wall.layers.len())
+        let bands = (0..shown.len())
             .map(|i| {
                 let (a, b) = (frame.offsets[i], frame.offsets[i + 1]);
                 Band {
@@ -229,6 +320,7 @@ impl WallState {
                     },
                     end: Line { p: wall.end, d: r },
                     gaps: Vec::new(),
+                    framing: framings[i],
                 }
             })
             .collect();
@@ -236,6 +328,7 @@ impl WallState {
             id: wall.id,
             frame,
             priorities,
+            layer_index,
             bands,
         })
     }

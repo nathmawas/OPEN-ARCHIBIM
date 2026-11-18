@@ -27,15 +27,50 @@ pub enum RenovationStatus {
     New,
 }
 
-/// One layer of a wall build-up.
+/// What a layer does in the construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerRole {
+    /// Carries loads.
+    LoadBearing,
+    /// Thermal or acoustic insulation.
+    Insulation,
+    /// Ventilated or still air gap.
+    AirGap,
+    /// Vapour control, rain screen or waterproofing.
+    Membrane,
+    /// Lining or cladding fixed to the structure (plasterboard, boarding).
+    Lining,
+    /// Surface finish (plaster, render, paint).
+    Finish,
+    /// Roof or wall covering (tiles, slates, zinc).
+    Covering,
+}
+
+/// Members set within the thickness of a layer, at a regular spacing: the
+/// studs of a timber frame wall in its insulation, the joists of a floor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Framing {
+    /// Material of the members.
+    pub material: Id,
+    /// Width of a member, measured along the wall.
+    pub width: f64,
+    /// Distance between member centres.
+    pub spacing: f64,
+}
+
+/// One layer of a build-up.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layer {
+    /// What the layer does.
+    pub role: LayerRole,
     /// The material, which carries the junction priority.
     pub material: Id,
     /// Thickness.
     pub thickness: f64,
     /// Renovation status of this layer only.
     pub status: RenovationStatus,
+    /// Members within the layer, if any.
+    pub framing: Option<Framing>,
 }
 
 /// A wall drawn along its reference line, from `start` to `end`.

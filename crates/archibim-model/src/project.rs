@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{LevelKind, LevelRef, Opening, Story, Wall};
+use crate::{Layer, LevelKind, LevelRef, Opening, Story, Wall};
 
 /// Permanent identifier of anything in the project.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -135,13 +135,30 @@ impl Project {
     pub fn insert_wall(&mut self, wall: Wall) -> Result<(), ModelError> {
         self.check_free(wall.id)?;
         self.story(wall.story)?;
-        for layer in &wall.layers {
-            self.material(layer.material)?;
-        }
-        if wall.layers.is_empty() || wall.layers.iter().any(|l| l.thickness <= 0.0) {
-            return Err(ModelError::Invalid("a wall needs layers with a thickness"));
-        }
+        self.check_layers(&wall.layers)?;
         self.walls.push(wall);
+        Ok(())
+    }
+
+    /// Checks a build-up: at least one layer, positive thicknesses, existing
+    /// materials, framing narrower than its spacing.
+    pub fn check_layers(&self, layers: &[Layer]) -> Result<(), ModelError> {
+        if layers.is_empty() || layers.iter().any(|l| l.thickness <= 0.0) {
+            return Err(ModelError::Invalid(
+                "a build-up needs layers with a thickness",
+            ));
+        }
+        for layer in layers {
+            self.material(layer.material)?;
+            if let Some(framing) = layer.framing {
+                self.material(framing.material)?;
+                if framing.width <= 0.0 || framing.spacing <= framing.width {
+                    return Err(ModelError::Invalid(
+                        "framing members must be narrower than their spacing",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 

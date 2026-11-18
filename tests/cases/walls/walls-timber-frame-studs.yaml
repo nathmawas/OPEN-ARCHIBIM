@@ -1,0 +1,13 @@
+id: walls-timber-frame-studs
+title: A timber frame wall shows its studs in plan
+status: proposed
+given: |
+  A timber frame wall 5000 long, from outside to inside: render 15,
+  wood fibre board 60, insulation 145 holding timber studs 45 wide every
+  600, OSB 12, plasterboard 13.
+expect:
+  - The studs are drawn in plan within the insulation layer.
+  - There is a stud at each end of the wall and one every 600 from the start.
+  - Each stud is 45 by 145.
+  - Changing the spacing to 400 redraws the studs, with no other setting
+    to change.
