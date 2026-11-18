@@ -1,5 +1,7 @@
 # Doors
 
+Part of the **Openings** tool (TOOLS.md, rule 15), with windows.
+
 Status: Draft
 
 ## The need
@@ -65,9 +67,7 @@ panel properties where IFC can express them, and explicit geometry.
 
 ## Open questions
 
-- Is joinery one tool with door and window presets, or two tools sharing
-  one model?
-
-Settled: the manoeuvring space is a door option. Presets start with France,
+Settled: doors and windows are one tool, **Openings**, interior or
+exterior from the start. The manoeuvring space is a door option. Presets start with France,
 kept as close as possible to widely used models; other countries come from
 their communities.

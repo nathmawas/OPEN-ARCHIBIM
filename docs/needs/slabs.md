@@ -25,9 +25,9 @@ details of facades and terraces.
   framing for timber floors.
 - **Floor finish**: an option of the slab. The slab is one element; its
   finish can change from one room to another.
-- **Level** linked to a story, with an offset; the reference can be the top
-  of the structure or the top of the finish.
-- **Openings**: stairwells and shafts, with their trimming.
+- **Level** linked to a story's finished level or structural level, with
+  an offset (see [Stories and levels](stories.md)).
+- **Voids**: stairwells and shafts, with their trimming.
 - **Edge details**, per edge:
   - edge trim or facing;
   - drip;
