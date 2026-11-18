@@ -205,6 +205,7 @@ architect's own comments.
 | Shell | **Dropped** | *"The shell becomes the roof; the two tools are unified"* — merged into Non-planar roof + Free form |
 | Skylight | **V1** | its own tool, placed in a roof: roofer's work, not joinery |
 | Dormer | **V1** | new: a parametric dormer placed on a roof (gable, hipped, shed, eyebrow…), with its cheeks, roof and front window; today it is either a rigid object or built by hand |
+| Moulding | **V1** | new: projecting or recessed relief placed on a wall face (string course, cornice, surround, rustication), following a profile along a path; it adds or removes matter from the wall and its build-up, with no free form or hidden operator |
 | Stair | **V1** | helical with no angle limit |
 | Railing | **V1** | follows an edge, 3 components |
 | Fence and gate | **V2** | new: fences, palisades, gates and their posts, along a line that follows the terrain; no more railings used as fences |
@@ -421,14 +422,14 @@ architect's own comments.
 
 ## 4. V1 stages
 
-V1 holds 110 tools. It ships in five stages. Each stage ends with something an
+V1 holds 111 tools. It ships in five stages. Each stage ends with something an
 architect can try on a real project. The scope does not change, only the
 delivery order. A merged feature arrives with the tool that absorbs it.
 
 | Stage | Name | What you can do at the end | Tools |
 |---|---|---|---|
 | **V1.0** | The core | A simple house (without a roof) drawn in plan and 3D, saved and read back as IFC. | 39 |
-| **V1.1** | The complete building | The same house with roof, stairs, railings, furniture, terrain and rooms, as new build or renovation. | 15 |
+| **V1.1** | The complete building | The same house with roof, stairs, railings, furniture, terrain and rooms, as new build or renovation. | 16 |
 | **V1.2** | The drawing | Plans, sections and elevations legible without retouching: lines, hatches, texts and dimensions set once for the whole project. | 30 |
 | **V1.3** | The permit set | A complete building permit application, published as PDF and DWG. | 21 |
 | **V1.4** | Free forms | Warped roofs, sculpted volumes, curtain walls, drawn profiles. | 5 |
@@ -454,7 +455,7 @@ French)*
 The same house with roof, stairs, railings, furniture, terrain and rooms, as
 new build or renovation.
 
-Roof · Dormer · Stair · Railing · Skylight · Object · Embedded library · Library
+Roof · Dormer · Moulding · Stair · Railing · Skylight · Object · Embedded library · Library
 manager · Favorites · Mesh · Location, survey point · Zone · Zone categories ·
 Renovation · Multi-story editing
 
@@ -496,10 +497,10 @@ profiles
 
 | | Count |
 |---|---|
-| V1 | 110 |
+| V1 | 111 |
 | V2 | 27 |
 | V3 | 14 |
 | Dropped | 15 |
-| **Total** | **166** |
+| **Total** | **167** |
 
 To be discussed in the issues, tool by tool.
