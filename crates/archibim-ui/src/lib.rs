@@ -1,31 +1,60 @@
 //! Windows, tools and palettes of OPEN-ARCHIBIM. Turns user gestures into
 //! commands; never changes the model directly.
 
-use archibim_geometry::LayerPlan;
-use archibim_model::{LayerRole, Point, Project};
-use egui::{Color32, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
+mod wall_tool;
 
-/// A plan view: draws the wall layers of a story, with pan and zoom.
-#[derive(Clone, Debug, Default)]
+use archibim_commands::History;
+use archibim_geometry::LayerPlan;
+use archibim_model::{LayerRole, Point, Project, Wall};
+use egui::{Color32, Key, Modifiers, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
+
+pub use wall_tool::WallTool;
+
+/// Snapping distance to existing points, in screen pixels.
+const SNAP_PX: f32 = 10.0;
+
+/// A plan view: draws the wall layers of a story, with pan and zoom, and
+/// lets the user draw walls.
+#[derive(Clone, Debug)]
 pub struct PlanView {
     /// Screen pixels per millimetre; 0 until the view is fitted.
     scale: f32,
     /// Model point (in millimetres) at the centre of the view.
     centre: Vec2,
+    /// The wall tool, with the wall it draws.
+    pub wall_tool: WallTool,
 }
 
 impl PlanView {
-    /// Draws `plan` in the whole available space. Drag pans, the wheel
-    /// zooms around the pointer, a double click fits the drawing.
-    pub fn show(&mut self, ui: &mut Ui, project: &Project, plan: &[LayerPlan]) {
+    /// A plan view whose wall tool draws copies of `template`.
+    pub fn new(template: Wall) -> Self {
+        Self {
+            scale: 0.0,
+            centre: Vec2::ZERO,
+            wall_tool: WallTool::new(template),
+        }
+    }
+
+    /// Draws `plan` in the whole available space and handles the user's
+    /// gestures. Returns true when the project changed.
+    ///
+    /// - Middle or right drag pans, the wheel zooms around the pointer,
+    ///   Home fits the drawing.
+    /// - Click, click draws a wall; the next one starts where the last
+    ///   ended. Typing a length then Enter sets it exactly. Shift keeps the
+    ///   wall horizontal or vertical. Escape stops.
+    /// - Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes.
+    pub fn show(&mut self, ui: &mut Ui, history: &mut History, plan: &[LayerPlan]) -> bool {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
         painter.rect_filled(rect, 0.0, Color32::WHITE);
 
-        if self.scale <= 0.0 || response.double_clicked() {
+        if self.scale <= 0.0 || ui.input(|i| i.key_pressed(Key::Home)) {
             self.fit(rect, plan);
         }
-        if response.dragged() {
+        if response.dragged_by(egui::PointerButton::Middle)
+            || response.dragged_by(egui::PointerButton::Secondary)
+        {
             self.centre -= response.drag_delta() / self.scale * Vec2::new(1.0, -1.0);
         }
         if let Some(pointer) = response.hover_pos() {
@@ -38,6 +67,87 @@ impl PlanView {
             }
         }
 
+        // The pointer in the model, snapped to wall ends and, with Shift,
+        // to the horizontal or vertical of the wall start.
+        let shift = ui.input(|i| i.modifiers.shift);
+        let cursor = response.hover_pos().map(|p| {
+            let p = self.to_model(rect, p);
+            let mut p = Point::new(f64::from(p.x), f64::from(p.y));
+            let snap = f64::from(SNAP_PX / self.scale);
+            if let Some(end) = nearest_end(history.project(), p, snap) {
+                p = end;
+            } else if shift && let Some(start) = self.wall_tool.start() {
+                p = orthogonal(start, p);
+            }
+            p
+        });
+        let mut changed = self.keys(ui, history, cursor);
+
+        if response.clicked()
+            && let Some(p) = cursor
+        {
+            changed |= self.wall_tool.click(history, p);
+        }
+
+        self.paint(&painter, rect, history.project(), plan);
+        if let (Some(start), Some(p)) = (self.wall_tool.start(), cursor) {
+            let end = self.wall_tool.typed_end(start, p).unwrap_or(p);
+            let line = [self.to_screen(rect, start), self.to_screen(rect, end)];
+            painter.line_segment(line, Stroke::new(1.5, Color32::from_rgb(0, 110, 200)));
+            let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
+            let label = match self.wall_tool.typed() {
+                "" => format!("{length:.0}"),
+                typed => typed.to_owned(),
+            };
+            painter.text(
+                line[1] + Vec2::new(12.0, -12.0),
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::FontId::proportional(14.0),
+                Color32::from_rgb(0, 110, 200),
+            );
+        }
+        if self.wall_tool.start().is_some() {
+            ui.ctx().request_repaint();
+        }
+        changed
+    }
+
+    /// Keyboard: undo, redo, and the wall tool's typed length.
+    fn keys(&mut self, ui: &Ui, history: &mut History, cursor: Option<Point>) -> bool {
+        let (undo, redo) = ui.input_mut(|i| {
+            let redo = i.consume_key(Modifiers::COMMAND, Key::Y)
+                || i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+            (i.consume_key(Modifiers::COMMAND, Key::Z), redo)
+        });
+        let mut changed = false;
+        if undo {
+            self.wall_tool.stop();
+            changed |= matches!(history.undo(), Ok(Some(_)));
+        }
+        if redo {
+            self.wall_tool.stop();
+            changed |= matches!(history.redo(), Ok(Some(_)));
+        }
+        let events = ui.input(|i| i.events.clone());
+        for event in events {
+            match event {
+                egui::Event::Text(text) => text.chars().for_each(|c| self.wall_tool.type_char(c)),
+                egui::Event::Key {
+                    key, pressed: true, ..
+                } => match key {
+                    Key::Backspace => self.wall_tool.erase(),
+                    Key::Escape => self.wall_tool.stop(),
+                    Key::Enter => changed |= self.wall_tool.enter(history, cursor),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        changed
+    }
+
+    fn paint(&self, painter: &egui::Painter, rect: Rect, project: &Project, plan: &[LayerPlan]) {
         let outline = Stroke::new(1.0, Color32::from_gray(40));
         for layer in plan {
             let role = project
@@ -82,6 +192,28 @@ impl PlanView {
     }
 }
 
+/// The wall end closest to `p`, if closer than `tolerance`.
+// ponytail: scans every wall; use a spatial index when projects get large.
+fn nearest_end(project: &Project, p: Point, tolerance: f64) -> Option<Point> {
+    let distance = |q: &Point| ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
+    project
+        .walls
+        .iter()
+        .flat_map(|w| [w.start, w.end])
+        .filter(|q| distance(q) <= tolerance)
+        .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+}
+
+/// `p` moved onto the horizontal or the vertical through `start`, whichever
+/// is closer.
+fn orthogonal(start: Point, p: Point) -> Point {
+    if (p.x - start.x).abs() >= (p.y - start.y).abs() {
+        Point::new(p.x, start.y)
+    } else {
+        Point::new(start.x, p.y)
+    }
+}
+
 /// Fill colour of framing members (studs, joists).
 const MEMBER: Color32 = Color32::from_rgb(160, 110, 60);
 
@@ -97,5 +229,23 @@ fn fill_of(role: LayerRole) -> Color32 {
         LayerRole::Lining => Color32::from_rgb(210, 180, 140),
         LayerRole::Finish => Color32::from_rgb(225, 225, 225),
         LayerRole::Covering => Color32::from_rgb(150, 150, 150),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shift_keeps_the_wall_square() {
+        let s = Point::new(0.0, 0.0);
+        assert_eq!(
+            orthogonal(s, Point::new(1000.0, 30.0)),
+            Point::new(1000.0, 0.0)
+        );
+        assert_eq!(
+            orthogonal(s, Point::new(-30.0, 900.0)),
+            Point::new(0.0, 900.0)
+        );
     }
 }

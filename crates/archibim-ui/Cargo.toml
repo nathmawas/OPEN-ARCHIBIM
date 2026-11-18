@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 archibim-model.workspace = true
+archibim-commands.workspace = true
 archibim-geometry.workspace = true
 egui = "0.37.0"
 
