@@ -67,4 +67,11 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) and the records in
 - Each new tool comes with its own icon, drawn to the catalogue rules
   (ADR 0004). Never copy or trace another product's icons.
 
-Build, test and benchmark commands will be added here with the first code.
+Commands, from the repository root:
+
+- `cargo test`: build and run every test;
+- `cargo clippy --all-targets -- -D warnings`: lints, no warning allowed;
+- `cargo fmt --all`: formatting.
+
+The architect test cases are run by `crates/archibim-commands/tests/cases.rs`,
+one test per case, named after it.
