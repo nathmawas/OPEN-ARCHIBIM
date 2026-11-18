@@ -1,0 +1,14 @@
+id: ifc-composite-wall-export
+title: A composite wall exports as a standard IFC layered wall
+status: proposed
+given: |
+  The wall of walls-l-corner-same-build-up, on story 0, 5000 long,
+  2800 high.
+when: |
+  The project is exported to IFC4 Reference View.
+expect:
+  - The file passes the buildingSMART validation service.
+  - The wall is an IfcWall contained in the IfcBuildingStorey of story 0.
+  - Its build-up is an IfcMaterialLayerSet with four layers, in order, with
+    thicknesses 20, 140, 200 and 15.
+  - Reading the file back gives the same wall, build-up and story.

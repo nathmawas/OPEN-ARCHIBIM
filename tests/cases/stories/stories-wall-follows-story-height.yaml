@@ -1,0 +1,11 @@
+id: stories-wall-follows-story-height
+title: A wall linked to the story above follows its height
+status: proposed
+given: |
+  Story 0 at level 0, story 1 at level 2800. A wall on story 0 starts at
+  its story level and its top is linked to story 1.
+when: |
+  The user raises story 1 to level 3000.
+expect:
+  - The wall is now 3000 high, with no other action.
+  - The wall keeps its build-up, its openings and their sill heights.

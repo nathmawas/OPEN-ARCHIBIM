@@ -79,10 +79,12 @@ Goal: a readable, credible project, and a settled technical choice.
 - [ ] **Needs map**: for each tool family, a sheet written **in our own
       words** (the need, today's problem, what we drop), fed by real studio
       cases
-- [ ] `PROVENANCE.md`: where each engine comes from (public specification,
+- [x] [PROVENANCE.md](PROVENANCE.md): where each engine comes from (public specification,
       reused code and its license)
 - [x] [CONTRIBUTING.md](CONTRIBUTING.md): clean-room rule, "concrete gap" issue template,
       review by an architect of every design feature, translation guide
+- [x] Working rules for AI assistants ([CLAUDE.md](CLAUDE.md)), automated
+      checks, first architect test cases ([tests/cases](tests/cases/README.md))
 - [ ] 10 architects interviewed about their three biggest frustrations
 - [ ] Prototype video, launch of the funding page
 

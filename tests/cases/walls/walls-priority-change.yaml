@@ -1,0 +1,14 @@
+id: walls-priority-change
+title: Changing a material priority updates every junction
+status: proposed
+given: |
+  The T junction of walls-t-junction-priority, where concrete has a higher
+  priority than brick.
+when: |
+  The user gives brick a higher priority than concrete, in the project's
+  material settings.
+expect:
+  - The junction is redrawn at once, with no manual fix.
+  - The brick of the internal wall now cuts into the concrete core.
+  - Every other junction that involves brick and concrete follows the same
+    rule.

@@ -1,0 +1,16 @@
+id: windows-add-side-panel
+title: Adding a glazed side panel to a door keeps its other properties
+status: proposed
+given: |
+  A single door leaf, 900 x 2150, oak frame 68, threshold, opening to the
+  right, with its own data (fire rating, acoustic rating, supplier code).
+when: |
+  The user adds a fixed glazed side panel 400 wide on the left.
+expect:
+  - It is still the same element, not a new object from a catalogue.
+  - The leaf stays 900 x 2150, opening to the right.
+  - Frame material and section, threshold and all data are unchanged.
+  - The side panel uses the same frame material and section by default.
+questions:
+  - Does the opening in the wall grow by the panel width (1300 total), or
+    does the panel come out of a fixed total width?

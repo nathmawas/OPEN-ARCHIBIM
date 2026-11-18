@@ -1,0 +1,58 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every commit is signed off (CONTRIBUTING.md, section 1)
+        run: |
+          fail=0
+          for c in $(git rev-list --no-merges "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"); do
+            if ! git log -1 --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::Commit $c has no Signed-off-by line. Use git commit -s."
+              fail=1
+            fi
+          done
+          exit $fail
+
+  test-cases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test cases are valid (tests/cases/README.md)
+        run: |
+          fail=0
+          for f in $(find tests/cases -name '*.yaml'); do
+            id=$(yq '.id' "$f") || { echo "::error file=$f::Not valid YAML"; fail=1; continue; }
+            [ "$id" = "$(basename "$f" .yaml)" ] || { echo "::error file=$f::id must match the file name"; fail=1; }
+            status=$(yq '.status' "$f")
+            case "$status" in proposed|agreed) ;; *) echo "::error file=$f::status must be proposed or agreed"; fail=1 ;; esac
+            for k in title given expect; do
+              [ "$(yq ".$k" "$f")" != "null" ] || { echo "::error file=$f::missing $k"; fail=1; }
+            done
+            if [ "$status" = agreed ] && [ "$(yq '.questions | length' "$f")" != "0" ]; then
+              echo "::error file=$f::an agreed case cannot have open questions"; fail=1
+            fi
+          done
+          exit $fail
+
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Internal links in the documentation work
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress '**/*.md'

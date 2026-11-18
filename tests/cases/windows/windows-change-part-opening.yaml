@@ -1,0 +1,13 @@
+id: windows-change-part-opening
+title: Changing how one part opens leaves the other parts unchanged
+status: proposed
+given: |
+  A window 2400 x 1500 made of three parts side by side: a fixed light, a
+  side-hung sash, a fixed light. A transom light 400 high runs above.
+when: |
+  The user sets the middle part to sliding.
+expect:
+  - Only the middle part changes: it becomes a sliding sash.
+  - The two fixed lights and the transom keep their sizes and settings.
+  - Overall size, sill height, frame material and data are unchanged.
+  - The plan and elevation symbols of the middle part show a sliding sash.
