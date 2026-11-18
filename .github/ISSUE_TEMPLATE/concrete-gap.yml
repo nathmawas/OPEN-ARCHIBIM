@@ -1,0 +1,54 @@
+name: Concrete gap
+description: A real problem you meet in the BIM tool you use today
+labels: ["gap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One gap per issue, described in your own words. Leave out client names, addresses and anything confidential.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool you use today
+      description: Name and version
+      placeholder: e.g. a BIM tool, version 2026
+    validations:
+      required: true
+  - type: textarea
+    id: task
+    attributes:
+      label: What you were trying to do
+      description: The task, and the kind of project (house, renovation, housing block, public building…)
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What the tool does
+      description: What goes wrong, and how much time or quality it costs you
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you would expect, as an architect
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - On every project
+        - Often
+        - Sometimes
+        - Rarely
+    validations:
+      required: true
+  - type: checkboxes
+    id: clean-room
+    attributes:
+      label: Clean-room rule
+      options:
+        - label: I described this in my own words and copied no text from a vendor's manual, help or interface.
+          required: true
