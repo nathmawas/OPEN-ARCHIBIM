@@ -19,3 +19,5 @@ expect_used = "deny"
 [workspace.dependencies]
 archibim-model = { path = "crates/archibim-model" }
 archibim-geometry = { path = "crates/archibim-geometry" }
+archibim-commands = { path = "crates/archibim-commands" }
+archibim-ui = { path = "crates/archibim-ui" }
