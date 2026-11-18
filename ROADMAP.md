@@ -75,7 +75,7 @@ Goal: a readable, credible project, and a settled technical choice.
       162 tools, V1 stages)
 - [ ] **Two-week prototype** of our own core (see "Technical approach"):
       stories, a composite wall with junction priorities, one composable
-      window; then the choice of stack and libraries
+      window; then the choice of interface toolkit and libraries
 - [ ] **Needs map**: for each tool family, a sheet written **in our own
       words** (the need, today's problem, what we drop), fed by real studio
       cases
@@ -85,6 +85,9 @@ Goal: a readable, credible project, and a settled technical choice.
       review by an architect of every design feature, translation guide
 - [x] Working rules for AI assistants ([CLAUDE.md](CLAUDE.md)), automated
       checks, first architect test cases ([tests/cases](tests/cases/README.md))
+- [x] [Architecture](ARCHITECTURE.md) and first
+      [decision records](docs/decisions/README.md): Rust, layers, GPU
+      rendering, icon catalogue
 - [ ] 10 architects interviewed about their three biggest frustrations
 - [ ] Prototype video, launch of the funding page
 
@@ -170,10 +173,11 @@ difference: reading and writing IFC, geometry and Boolean operations, PDF and
 DWG output, 3D display. Each one is picked on its merits, kept behind our own
 interface so it can be replaced, and recorded in `PROVENANCE.md`.
 
-The two-week prototype of Stage 0 builds three things on a candidate stack:
-**stories**, **a composite wall with junction priorities** and **one
-composable window**. It settles the stack (language, UI toolkit) and the
-first libraries.
+The code is written in **Rust**, in layers: see
+[ARCHITECTURE.md](ARCHITECTURE.md). The two-week prototype of Stage 0 builds
+three things: **stories**, **a composite wall with junction priorities** and
+**one composable window**. It settles the interface toolkit and the first
+libraries, and measures the performance budget.
 
 ## Leaving another tool
 
