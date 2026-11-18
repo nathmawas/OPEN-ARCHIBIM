@@ -141,7 +141,8 @@ drawn profiles.
 
 ## V2 *(9 to 12 months)*
 
-Issue management (BCF), clash detection, model comparison, linked modules,
+**Import from Revit, Archicad and Vectorworks** comes first (see "Leaving
+another tool" below). Then issue management (BCF), clash detection, model comparison, linked modules,
 revisions, details, automatic dimensioning, interior elevations, rendering,
 sun studies…: the 25 V2 tools in [TOOLS.md](TOOLS.md).
 
@@ -171,6 +172,45 @@ The two-week prototype of Stage 0 builds three things on a candidate stack:
 **stories**, **a composite wall with junction priorities** and **one
 composable window**. It settles the stack (language, UI toolkit) and the
 first libraries.
+
+## Leaving another tool
+
+A studio must be able to bring its projects in without losing its work. IFC
+alone is not enough: types, composite walls, stories and views come out
+damaged. We import the three main BIM formats, **Revit, Archicad and
+Vectorworks**, in three steps:
+
+1. **IFC, tested on real exports** of each tool (V1.0).
+2. **Import add-ons** (V2): a small add-on runs inside Revit, Archicad or
+   Vectorworks and sends the whole model to OPEN-ARCHIBIM through the tool's
+   public programming interface. It is the richest and safest path. It needs
+   a licence of the source tool at the time of the move.
+3. **Direct readers** (V3): open an RVT, PLN or VWX file with no licence at
+   all, for archives. Read only, built from the study of files, never from
+   the software itself, and kept in a separate module.
+
+We import, we do not write these formats: an open project lives in an open
+format.
+
+## Going to another tool
+
+We do not write RVT, PLN or VWX. We write an IFC that every tool reads well,
+which is a promise in itself:
+
+- **IFC4 Reference View** by default: the export most tools read reliably,
+  for coordination and handover. **IFC2x3 Coordination View 2.0** remains
+  available for older tools and partners who still ask for it. IFC4.3 follows
+  when the main tools read it.
+- **Plain geometry first**: extrusions where they exist, closed solids
+  otherwise, so that no tool has to guess.
+- **Standard data**: buildingSMART property sets and quantities, stories,
+  spaces, materials and layer sets, classifications through bSDD. Our own
+  data goes into clearly named extra property sets, never in place of the
+  standard ones.
+- **Tested, not assumed**: every release exports a set of test projects,
+  checks them with the buildingSMART validation service, and imports them
+  into Revit, Archicad, Vectorworks and open viewers. What each tool loses is
+  published in a compatibility table.
 
 ## Related projects
 
