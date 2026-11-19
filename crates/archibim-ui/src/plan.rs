@@ -317,9 +317,12 @@ impl PlanView {
                 painter.add(Shape::closed_line(outline, Stroke::new(1.0, SELECTED)));
             }
             let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
-            let label = match wall.typed() {
-                "" => format!("{length:.0}"),
-                typed => typed.to_owned(),
+            let typed = wall.typed();
+            let label = if typed.is_empty() {
+                let angle = (end.y - start.y).atan2(end.x - start.x).to_degrees();
+                format!("{length:.0}  {angle:.1}°")
+            } else {
+                typed
             };
             painter.text(
                 self.screen(end) + Vec2::new(12.0, -12.0),

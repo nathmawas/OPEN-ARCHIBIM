@@ -10,8 +10,9 @@ when: |
 expect:
   - A circle gives two half-circle walls on the same centre and radius, in
     one undo step.
-  - An arc turns the shorter way from the start to the end, and ends on the
-    circle.
+  - An arc follows the pointer round its centre, past a half circle if the
+    pointer goes there, and ends on the circle. Without moving round, it
+    turns the shorter way.
   - The layers of a curved wall follow concentric arcs; on its axis, a
     wall 200 thick lies between radius minus 100 and radius plus 100, and
     made thicker it keeps its axis.

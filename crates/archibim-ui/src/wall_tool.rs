@@ -33,7 +33,16 @@ pub struct WallTool {
     pub method: WallMethod,
     /// The points clicked in the current chain or rectangle.
     points: Vec<Point>,
+    /// The length typed so far.
     typed: String,
+    /// The angle typed so far, in degrees anticlockwise from the x axis.
+    angle: String,
+    /// Typing goes to the angle rather than the length.
+    on_angle: bool,
+    /// How far the pointer has turned around the centre of an arc, and
+    /// where it was last.
+    turn: f64,
+    last_angle: Option<f64>,
 }
 
 impl WallTool {
@@ -44,7 +53,41 @@ impl WallTool {
             method: WallMethod::Chain,
             points: Vec::new(),
             typed: String::new(),
+            angle: String::new(),
+            on_angle: false,
+            turn: 0.0,
+            last_angle: None,
         }
+    }
+
+    /// The pointer moved to `p`: an arc follows it round its centre, so it
+    /// can turn past a half circle.
+    pub fn hover(&mut self, p: Point) {
+        let (WallMethod::Arc, &[c, _]) = (self.method, self.points.as_slice()) else {
+            self.last_angle = None;
+            return;
+        };
+        if distance(c, p) < 1.0 {
+            return;
+        }
+        let a = (p.y - c.y).atan2(p.x - c.x);
+        if let Some(previous) = self.last_angle {
+            let tau = std::f64::consts::TAU;
+            let mut step = (a - previous).rem_euclid(tau);
+            if step > std::f64::consts::PI {
+                step -= tau;
+            }
+            self.turn = (self.turn + step).clamp(-tau + 1e-3, tau - 1e-3);
+        }
+        self.last_angle = Some(a);
+    }
+
+    /// The start angle and the turn of the arc being drawn towards `p`: as
+    /// far as the pointer went round, or else the shorter way.
+    fn arc_turn(&self, c: Point, a: Point, p: Point) -> Option<(f64, f64)> {
+        let (from, shorter) = arc_sweep(c, a, p)?;
+        let followed = self.last_angle.is_some() && self.turn.abs() > 1e-6;
+        Some((from, if followed { self.turn } else { shorter }))
     }
 
     /// Where the wall being drawn starts, if one is.
@@ -57,9 +100,27 @@ impl WallTool {
         &self.points
     }
 
-    /// The length typed so far, in millimetres.
-    pub fn typed(&self) -> &str {
-        &self.typed
+    /// What was typed, to show next to the pointer: the length, then the
+    /// angle after `<`.
+    pub fn typed(&self) -> String {
+        if self.angle.is_empty() && !self.on_angle {
+            self.typed.clone()
+        } else {
+            format!("{} < {}°", self.typed, self.angle)
+        }
+    }
+
+    /// Tab or `<`: typing goes to the angle, or back to the length.
+    pub fn switch_field(&mut self) {
+        if self.start().is_some() {
+            self.on_angle = !self.on_angle;
+        }
+    }
+
+    fn clear_typed(&mut self) {
+        self.typed.clear();
+        self.angle.clear();
+        self.on_angle = false;
     }
 
     /// A click: starts drawing, or places the next point. Returns true when
@@ -69,7 +130,7 @@ impl WallTool {
             Some(start) => self.typed_end(start, p).unwrap_or(p),
             None => p,
         };
-        self.typed.clear();
+        self.clear_typed();
         self.place(history, p)
     }
 
@@ -81,35 +142,73 @@ impl WallTool {
         let Some(end) = self.typed_end(start, toward) else {
             return false;
         };
-        self.typed.clear();
+        self.clear_typed();
         self.place(history, end)
     }
 
-    /// The end of a wall of the typed length, from `start` towards `toward`.
+    /// The end of the wall from `start` with what was typed: the typed
+    /// length, along the typed angle or towards `toward`. With an angle
+    /// and no length, the pointer's distance along that angle.
     pub fn typed_end(&self, start: Point, toward: Point) -> Option<Point> {
-        let length: f64 = self.typed.replace(',', ".").parse().ok()?;
-        let (dx, dy) = (toward.x - start.x, toward.y - start.y);
-        let norm = (dx * dx + dy * dy).sqrt();
-        (length > 0.0 && norm > 0.0)
-            .then(|| Point::new(start.x + dx / norm * length, start.y + dy / norm * length))
+        let number = |s: &str| s.replace(',', ".").parse::<f64>().ok();
+        let (length, angle) = (number(&self.typed), number(&self.angle));
+        let (dx, dy) = match angle {
+            Some(degrees) => {
+                let a = degrees.to_radians();
+                (a.cos(), a.sin())
+            }
+            None => {
+                let (dx, dy) = (toward.x - start.x, toward.y - start.y);
+                let norm = (dx * dx + dy * dy).sqrt();
+                if norm == 0.0 {
+                    return None;
+                }
+                (dx / norm, dy / norm)
+            }
+        };
+        let length = match (length, angle) {
+            (Some(l), _) => l,
+            (None, Some(_)) => (toward.x - start.x) * dx + (toward.y - start.y) * dy,
+            (None, None) => return None,
+        };
+        (length > 0.0).then(|| Point::new(start.x + dx * length, start.y + dy * length))
     }
 
-    /// A typed character: digits and a decimal separator build the length.
+    /// A typed character: digits and a decimal separator build the length,
+    /// or the angle after `<`, which may be negative.
     pub fn type_char(&mut self, c: char) {
-        if self.start().is_some() && (c.is_ascii_digit() || c == '.' || c == ',') {
-            self.typed.push(c);
+        if self.start().is_none() {
+            return;
+        }
+        match c {
+            '<' => self.switch_field(),
+            '-' if self.on_angle && self.angle.is_empty() => self.angle.push(c),
+            c if c.is_ascii_digit() || c == '.' || c == ',' => {
+                if self.on_angle {
+                    self.angle.push(c);
+                } else {
+                    self.typed.push(c);
+                }
+            }
+            _ => {}
         }
     }
 
     /// Backspace: erases the last typed character.
     pub fn erase(&mut self) {
-        self.typed.pop();
+        if !self.on_angle {
+            self.typed.pop();
+        } else if self.angle.pop().is_none() {
+            self.on_angle = false;
+        }
     }
 
     /// Escape: stops drawing.
     pub fn stop(&mut self) {
         self.points.clear();
-        self.typed.clear();
+        self.clear_typed();
+        self.turn = 0.0;
+        self.last_angle = None;
     }
 
     /// What the next click would draw, as a line through its points, for
@@ -126,7 +225,7 @@ impl WallTool {
                 Some(arc_points(c, r, 0.0, std::f64::consts::TAU))
             }
             (WallMethod::Arc, &[c, a]) => {
-                let (from, sweep) = arc_sweep(c, a, p)?;
+                let (from, sweep) = self.arc_turn(c, a, p)?;
                 Some(arc_points(c, distance(c, a), from, sweep))
             }
             _ => None,
@@ -166,13 +265,17 @@ impl WallTool {
                 history.run(Command::Group(commands)).is_ok()
             }
             WallMethod::Arc => match *self.points.as_slice() {
-                [_] => {
+                [c] => {
                     self.points.push(p);
+                    // The pointer starts turning from the start of the arc.
+                    self.turn = 0.0;
+                    self.last_angle = Some((p.y - c.y).atan2(p.x - c.x));
                     false
                 }
                 [c, a] => {
+                    let turn = self.arc_turn(c, a, p);
                     self.stop();
-                    let Some((_, sweep)) = arc_sweep(c, a, p) else {
+                    let Some((_, sweep)) = turn else {
                         return false;
                     };
                     let r = distance(c, a);
@@ -529,6 +632,53 @@ mod tests {
             "quarter, anticlockwise"
         );
         assert!(close(w.end, Point::new(0.0, 1000.0)), "on the circle");
+        Ok(())
+    }
+
+    #[test]
+    fn a_typed_angle_sets_the_direction_with_or_without_a_length() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Single;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        "2000<90".chars().for_each(|c| tool.type_char(c));
+        assert_eq!(tool.typed(), "2000 < 90°");
+        assert!(tool.enter(&mut h, Some(Point::new(500.0, 0.0))));
+        assert!(close(h.project().walls[0].end, Point::new(0.0, 2000.0)));
+        // An angle alone: the pointer gives the length along it.
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.switch_field();
+        "-45".chars().for_each(|c| tool.type_char(c));
+        assert!(tool.click(&mut h, Point::new(1000.0, 0.0)));
+        let end = h.project().walls[1].end;
+        // The pointer at 1000 east, projected on the 45 degrees south-east.
+        assert!(close(end, Point::new(500.0, -500.0)), "{end:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn an_arc_follows_the_pointer_past_a_half_circle() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Arc;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(1000.0, 0.0));
+        // Round anticlockwise through north and west to south.
+        for (x, y) in [
+            (700.0, 700.0),
+            (0.0, 1000.0),
+            (-700.0, 700.0),
+            (-1000.0, 0.0),
+            (-700.0, -700.0),
+            (0.0, -1000.0),
+        ] {
+            tool.hover(Point::new(x, y));
+        }
+        assert!(tool.click(&mut h, Point::new(0.0, -1000.0)));
+        let w = &h.project().walls[0];
+        assert!(
+            (w.sweep - 1.5 * std::f64::consts::PI).abs() < 1e-9,
+            "{}",
+            w.sweep
+        );
         Ok(())
     }
 }

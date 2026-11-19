@@ -323,6 +323,9 @@ impl Workspace {
             )
         });
         let cursor = snapped.as_ref().map(|s| s.point);
+        if let Some(p) = cursor {
+            self.wall.hover(p);
+        }
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
         let mut changed = !typing && self.keys(ui, history, cursor);
@@ -497,6 +500,7 @@ impl Workspace {
                     key, pressed: true, ..
                 } => match key {
                     Key::Backspace => self.wall.erase(),
+                    Key::Tab if self.tool == Tool::Wall => self.wall.switch_field(),
                     Key::Escape => {
                         self.stop();
                         self.selection = None;
