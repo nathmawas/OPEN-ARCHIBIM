@@ -327,7 +327,7 @@ impl Project {
             || self
                 .beams
                 .iter()
-                .any(|b| b.story == id || b.top.story == id);
+                .any(|b| b.story == id || b.level.story == id);
         if used {
             return Err(ModelError::Invalid("walls still refer to this story"));
         }

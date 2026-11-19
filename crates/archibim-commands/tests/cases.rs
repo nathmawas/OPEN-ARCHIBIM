@@ -5,11 +5,13 @@
 //! an architect agrees them.
 
 use archibim_commands::{Command, History};
-use archibim_geometry::{LayerPlan, Phase, model_prisms, plan_layers, polygon_area};
+use archibim_geometry::{
+    LayerPlan, Phase, beam_outline, column_outline, model_prisms, plan_layers, polygon_area,
+};
 use archibim_model::{
-    Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind, LevelRef, Material,
-    NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
-    RenovationStatus, Slab, Story, Wall,
+    Align, Anchor, Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind,
+    LevelRef, Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point,
+    Project, RenovationStatus, Slab, Story, Wall, WallReference,
 };
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -79,6 +81,7 @@ impl Fixture {
             story: self.story0,
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
+            reference: WallReference::LeftFace,
             layers,
             bottom: LevelRef {
                 story: self.story0,
@@ -763,6 +766,8 @@ fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
         id: f.h.new_id(),
         story: f.story0,
         at: Point::new(1000.0, 1000.0),
+        anchor: Anchor::default(),
+        angle: 0.0,
         width: 300.0,
         depth: 300.0,
         material: concrete,
@@ -778,7 +783,11 @@ fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
         width: 200.0,
         height: 400.0,
         material: concrete,
-        top: level(f.story1),
+        anchor: Anchor {
+            width: Align::Middle,
+            depth: Align::First,
+        },
+        level: level(f.story1),
     };
     f.h.run(Command::AddBeam(beam.clone()))?;
 
@@ -857,6 +866,8 @@ fn views_3d_model() -> Result {
         id: column,
         story: f.story0,
         at: Point::new(2500.0, 2000.0),
+        anchor: Anchor::default(),
+        angle: 0.0,
         width: 300.0,
         depth: 300.0,
         material: concrete,
@@ -872,7 +883,11 @@ fn views_3d_model() -> Result {
         width: 200.0,
         height: 400.0,
         material: concrete,
-        top: level(f.story1),
+        anchor: Anchor {
+            width: Align::Middle,
+            depth: Align::First,
+        },
+        level: level(f.story1),
     }))?;
 
     let volume =
@@ -971,5 +986,170 @@ fn walls_drawing_methods() -> Result {
         f.h.run(Command::AddWall(point)).is_err(),
         "a wall needs a length"
     );
+    Ok(())
+}
+
+/// The smallest and largest y of every polygon of a wall.
+fn y_range(plan: &[LayerPlan], wall: Id) -> (f64, f64) {
+    plan.iter()
+        .filter(|l| l.wall == wall)
+        .flat_map(|l| l.polygons.iter().flatten())
+        .fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            (lo.min(p.y), hi.max(p.y))
+        })
+}
+
+#[test]
+fn walls_reference_line() -> Result {
+    let mut f = Fixture::new()?;
+    let render = f.material("render", 1)?;
+    let insulation = f.material("insulation", 3)?;
+    let concrete = f.material("concrete", 9)?;
+    let plaster = f.material("plaster", 1)?;
+
+    // On the axis, the line stays put when the wall gets thicker.
+    let a = f.wall((0.0, 0.0), (5000.0, 0.0), &[(concrete, 200.0)])?;
+    let mut wall = f.h.project().wall(a)?.clone();
+    wall.reference = WallReference::Axis;
+    f.h.run(Command::ReplaceWall(wall.clone()))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(lo, -100.0) && close(hi, 100.0), "{lo} {hi}");
+    wall.layers[0].thickness = 300.0;
+    f.h.run(Command::ReplaceWall(wall))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(lo, -150.0) && close(hi, 150.0), "{lo} {hi}");
+    f.h.undo()?;
+    f.h.undo()?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(lo, -200.0) && close(hi, 0.0), "undone: left face");
+    f.h.undo()?;
+
+    // On the outside face of the concrete: render and insulation outside
+    // (to the left, y > 0), plaster inside.
+    let b = f.wall_with(
+        (0.0, 0.0),
+        (5000.0, 0.0),
+        vec![
+            layer_of(LayerRole::Finish, render, 20.0),
+            layer_of(LayerRole::Insulation, insulation, 140.0),
+            layer_of(LayerRole::LoadBearing, concrete, 200.0),
+            layer_of(LayerRole::Lining, plaster, 15.0),
+        ],
+    )?;
+    let mut wall = f.h.project().wall(b)?.clone();
+    wall.reference = WallReference::LoadBearingLeft;
+    f.h.run(Command::ReplaceWall(wall.clone()))?;
+    let (lo, hi) = y_range(&f.plan()?, b);
+    assert!(close(hi, 160.0) && close(lo, -215.0), "{lo} {hi}");
+    // Without load-bearing layers, back on the face on its side.
+    wall.reference = WallReference::LoadBearingRight;
+    for layer in &mut wall.layers {
+        layer.role = LayerRole::Lining;
+    }
+    f.h.run(Command::ReplaceWall(wall))?;
+    let (lo, hi) = y_range(&f.plan()?, b);
+    assert!(close(lo, 0.0) && close(hi, 375.0), "{lo} {hi}");
+    f.h.undo()?;
+    f.h.undo()?;
+    f.h.undo()?;
+
+    // Two thicknesses on their axis meet on a mitre, no gap, no overlap.
+    let c = f.wall((0.0, 0.0), (5000.0, 0.0), &[(concrete, 200.0)])?;
+    let d = f.wall((5000.0, 0.0), (5000.0, -5000.0), &[(concrete, 300.0)])?;
+    for id in [c, d] {
+        let mut wall = f.h.project().wall(id)?.clone();
+        wall.reference = WallReference::Axis;
+        f.h.run(Command::ReplaceWall(wall))?;
+    }
+    let plan = f.plan()?;
+    assert_eq!(
+        shared_vertices(&layer(&plan, c, 0), &layer(&plan, d, 0)),
+        2,
+        "the corner closes"
+    );
+    // The L of axes 5000 by 5000, 200 then 300 thick, mitred.
+    let expected = (5000.0 + 150.0) * 200.0 + (5000.0 + 100.0) * 300.0 - 200.0 * 300.0;
+    assert!(close(total_area(&plan), expected), "{}", total_area(&plan));
+    Ok(())
+}
+
+#[test]
+fn structure_placed_point() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    let level = |story| LevelRef {
+        story,
+        kind: LevelKind::Finished,
+        offset: 0.0,
+    };
+    let column = Column {
+        id: f.h.new_id(),
+        story: f.story0,
+        at: Point::new(1000.0, 1000.0),
+        anchor: Anchor {
+            width: Align::First,
+            depth: Align::First,
+        },
+        angle: 0.0,
+        width: 300.0,
+        depth: 200.0,
+        material: concrete,
+        bottom: level(f.story0),
+        top: level(f.story1),
+    };
+    let bounds = |points: &[Point]| {
+        points.iter().fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(x0, y0, x1, y1), p| (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y)),
+        )
+    };
+    let (x0, y0, x1, y1) = bounds(&column_outline(&column));
+    assert!(close(x0, 1000.0) && close(x1, 1300.0), "right of the click");
+    assert!(close(y0, 1000.0) && close(y1, 1200.0), "behind the click");
+    let turned = Column {
+        angle: std::f64::consts::FRAC_PI_2,
+        ..column.clone()
+    };
+    let (x0, y0, x1, y1) = bounds(&column_outline(&turned));
+    assert!(
+        close(x0, 800.0) && close(x1, 1000.0),
+        "turned around the click"
+    );
+    assert!(
+        close(y0, 1000.0) && close(y1, 1300.0),
+        "turned around the click"
+    );
+    let wider = Column {
+        width: 500.0,
+        ..column.clone()
+    };
+    assert!(
+        close(bounds(&column_outline(&wider)).0, 1000.0),
+        "kept point"
+    );
+
+    let beam = Beam {
+        id: f.h.new_id(),
+        story: f.story0,
+        start: Point::new(0.0, 0.0),
+        end: Point::new(4000.0, 0.0),
+        anchor: Anchor {
+            width: Align::First,
+            depth: Align::Last,
+        },
+        width: 200.0,
+        height: 400.0,
+        material: concrete,
+        level: level(f.story1),
+    };
+    f.h.run(Command::AddBeam(beam.clone()))?;
+    let (_, y0, _, y1) = bounds(&beam_outline(&beam).ok_or("no length")?);
+    assert!(close(y0, -200.0) && close(y1, 0.0), "right of the line");
+    let prism = model_prisms(f.h.project(), Phase::Proposed)?
+        .into_iter()
+        .find(|p| p.element == beam.id)
+        .ok_or("no beam volume")?;
+    assert!(close(prism.bottom, 2800.0), "bottom on the level");
+    assert!(close(prism.top, 3200.0));
     Ok(())
 }

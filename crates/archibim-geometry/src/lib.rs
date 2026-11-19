@@ -109,36 +109,51 @@ pub fn plan_layers(
 pub fn opening_outline(project: &Project, opening: Id) -> Result<Vec<Point>, ModelError> {
     let o = project.opening(opening)?;
     let wall = project.wall(o.wall)?;
-    let d = unit(sub(wall.end, wall.start)).ok_or(ModelError::Invalid("a wall has no length"))?;
+    let (start, end) = wall
+        .left_face()
+        .ok_or(ModelError::Invalid("a wall has no length"))?;
+    let d = unit(sub(end, start)).ok_or(ModelError::Invalid("a wall has no length"))?;
     let r = Point::new(d.y, -d.x);
-    let a = add(wall.start, mul(d, o.position));
-    let b = add(wall.start, mul(d, o.position + o.wall_opening_width()));
+    let a = add(start, mul(d, o.position));
+    let b = add(start, mul(d, o.position + o.wall_opening_width()));
     let t = wall.thickness();
     Ok(vec![a, b, add(b, mul(r, t)), add(a, mul(r, t))])
 }
 
-/// A column in plan.
+/// A column in plan, placed by its anchor and turned by its angle.
 pub fn column_outline(column: &Column) -> Vec<Point> {
-    let (w, h) = (column.width / 2.0, column.depth / 2.0);
+    let x0 = column.anchor.width.first_edge(column.width);
+    let y0 = column.anchor.depth.first_edge(column.depth);
+    let (x1, y1) = (x0 + column.width, y0 + column.depth);
+    let (sin, cos) = column.angle.sin_cos();
     let c = column.at;
-    vec![
-        Point::new(c.x - w, c.y - h),
-        Point::new(c.x + w, c.y - h),
-        Point::new(c.x + w, c.y + h),
-        Point::new(c.x - w, c.y + h),
-    ]
+    [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        .iter()
+        .map(|&(x, y)| Point::new(c.x + x * cos - y * sin, c.y + x * sin + y * cos))
+        .collect()
 }
 
-/// A beam in plan, or nothing if it has no length.
+/// A beam in plan, placed across by its anchor, or nothing if it has no
+/// length.
 pub fn beam_outline(beam: &Beam) -> Option<Vec<Point>> {
     let d = unit(sub(beam.end, beam.start))?;
-    let n = mul(Point::new(-d.y, d.x), beam.width / 2.0);
+    // Measured towards the right face, from the reference line.
+    let r = Point::new(d.y, -d.x);
+    let near = beam.anchor.width.first_edge(beam.width);
+    let (a, b) = (mul(r, near), mul(r, near + beam.width));
     Some(vec![
-        add(beam.start, n),
-        add(beam.end, n),
-        sub(beam.end, n),
-        sub(beam.start, n),
+        add(beam.start, a),
+        add(beam.end, a),
+        add(beam.end, b),
+        add(beam.start, b),
     ])
+}
+
+/// The bottom and top of a beam whose reference line is at `level`.
+fn beam_heights(beam: &Beam, level: f64) -> (f64, f64) {
+    // Measured down from the reference line: first is the top face.
+    let top = level - beam.anchor.depth.first_edge(beam.height);
+    (top - beam.height, top)
 }
 
 /// A straight extrusion for the 3D view: an outline in plan between two
@@ -233,8 +248,8 @@ pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, Model
     }
     for beam in &project.beams {
         if let Some(outline) = beam_outline(beam) {
-            let top = project.level(&beam.top)?;
-            push(beam.id, None, outline, top - beam.height, top);
+            let (bottom, top) = beam_heights(beam, project.level(&beam.level)?);
+            push(beam.id, None, outline, bottom, top);
         }
     }
     Ok(prisms)
@@ -411,7 +426,6 @@ fn intersect(a: Line, b: Line) -> Option<Point> {
 /// The axes of a wall: `d` along it, `r` towards its right face.
 struct Frame {
     start: Point,
-    end: Point,
     d: Point,
     r: Point,
     len: f64,
@@ -540,6 +554,8 @@ enum End {
 
 struct WallState {
     id: Id,
+    /// The ends of the reference line, where walls join.
+    reference: [Point; 2],
     frame: Frame,
     priorities: Vec<u8>,
     bands: Vec<Band>,
@@ -549,8 +565,10 @@ struct WallState {
 
 impl WallState {
     fn new(project: &Project, wall: &Wall, phase: Phase) -> Result<Self, ModelError> {
-        let d =
-            unit(sub(wall.end, wall.start)).ok_or(ModelError::Invalid("a wall has no length"))?;
+        let (start, end) = wall
+            .left_face()
+            .ok_or(ModelError::Invalid("a wall has no length"))?;
+        let d = unit(sub(end, start)).ok_or(ModelError::Invalid("a wall has no length"))?;
         let r = Point::new(d.y, -d.x);
         let mut offsets = vec![0.0];
         let mut priorities = Vec::new();
@@ -566,11 +584,10 @@ impl WallState {
             priorities.push(project.material(layer.material)?.priority);
         }
         let frame = Frame {
-            start: wall.start,
-            end: wall.end,
+            start,
             d,
             r,
-            len: length(sub(wall.end, wall.start)),
+            len: length(sub(end, start)),
             offsets,
         };
         let bands = (0..shown.len())
@@ -580,11 +597,8 @@ impl WallState {
                     lo: frame.line(a),
                     hi: frame.line(b),
                     mid: frame.line((a + b) / 2.0),
-                    start: Line {
-                        p: wall.start,
-                        d: r,
-                    },
-                    end: Line { p: wall.end, d: r },
+                    start: Line { p: start, d: r },
+                    end: Line { p: end, d: r },
                     gaps: Vec::new(),
                     framing: framings[i],
                 }
@@ -592,6 +606,7 @@ impl WallState {
             .collect();
         Ok(Self {
             id: wall.id,
+            reference: [wall.start, wall.end],
             frame,
             priorities,
             layer_index,
@@ -600,7 +615,10 @@ impl WallState {
     }
 
     fn ends(&self) -> [(Point, End); 2] {
-        [(self.frame.start, End::Start), (self.frame.end, End::End)]
+        [
+            (self.reference[0], End::Start),
+            (self.reference[1], End::End),
+        ]
     }
 
     /// Direction from an end into the body of the wall.
@@ -705,9 +723,22 @@ fn corner(
             }
         }
         _ => {
-            let mitre = match unit(add(a.body(ei), b.body(ej))) {
-                Some(d) => Line { p, d },
-                None => Line { p, d: a.frame.r },
+            // The mitre joins where the faces on each side meet. Walls
+            // running the same way round have their left faces on the same
+            // side; walls meeting end to end or start to start, opposite.
+            let (ta, tb) = (a.frame.thickness(), b.frame.thickness());
+            let (b_left, b_right) = if ei == ej { (tb, 0.0) } else { (0.0, tb) };
+            let left = intersect(a.frame.line(0.0), b.frame.line(b_left));
+            let right = intersect(a.frame.line(ta), b.frame.line(b_right));
+            let mitre = match (left, right) {
+                (Some(l), Some(r)) if length(sub(r, l)) > 1e-9 => Line {
+                    p: l,
+                    d: mul(sub(r, l), 1.0 / length(sub(r, l))),
+                },
+                _ => match unit(add(a.body(ei), b.body(ej))) {
+                    Some(d) => Line { p, d },
+                    None => Line { p, d: a.frame.r },
+                },
             };
             (mitre, mitre)
         }

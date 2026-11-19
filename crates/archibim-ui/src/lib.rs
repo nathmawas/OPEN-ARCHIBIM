@@ -18,7 +18,7 @@ use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
 use wall_tool::rectangle;
-pub use wall_tool::{Reference, WallMethod, WallTool};
+pub use wall_tool::{WallMethod, WallTool};
 
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
@@ -211,14 +211,6 @@ impl Workspace {
                     (WallMethod::Rectangle, "method.rectangle"),
                 ] {
                     ui.selectable_value(&mut w.method, method, t(key));
-                }
-                ui.label(t("settings.reference"));
-                for (reference, key) in [
-                    (Reference::Left, "ref.left"),
-                    (Reference::Axis, "ref.axis"),
-                    (Reference::Right, "ref.right"),
-                ] {
-                    ui.selectable_value(&mut w.reference, reference, t(key));
                 }
             }
             Tool::Slab => {

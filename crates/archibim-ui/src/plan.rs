@@ -3,7 +3,7 @@
 use archibim_geometry::{
     LayerPlan, beam_outline, column_outline, opening_outline, triangulate, visible_edges,
 };
-use archibim_model::{Id, LayerRole, Point, Project};
+use archibim_model::{Id, LayerRole, Point, Project, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
 use crate::WallTool;
@@ -238,6 +238,20 @@ impl PlanView {
         if let Some(start) = wall.start() {
             let end = wall.typed_end(start, p).unwrap_or(p);
             painter.line_segment([self.screen(start), self.screen(end)], line);
+            // The faces, placed from the clicked reference line.
+            let ghost = Wall {
+                start,
+                end,
+                ..wall.template.clone()
+            };
+            if let Some((a, b)) = ghost.left_face() {
+                let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+                let k = ghost.thickness() / l;
+                // The right of (dx, dy) is (dy, -dx).
+                let r = |q: Point| Point::new(q.x + (b.y - a.y) * k, q.y - (b.x - a.x) * k);
+                let outline = [a, b, r(b), r(a)].iter().map(|q| self.screen(*q)).collect();
+                painter.add(Shape::closed_line(outline, Stroke::new(1.0, SELECTED)));
+            }
             let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
             let label = match wall.typed() {
                 "" => format!("{length:.0}"),

@@ -1,0 +1,18 @@
+id: structure-placed-point
+title: Columns and beams are placed by a chosen point of their section
+status: proposed
+given: |
+  A column is placed by one click, a beam by two. By default the column is
+  placed by its centre, and the beam by the middle of its top face.
+when: |
+  The architect picks another point of the section in the palette: one of
+  the nine points of the column (corners, middles of the edges, centre), or
+  one of the nine points of the beam section (left face, axis or right face;
+  top, middle or bottom). The column can also be turned.
+expect:
+  - A column 300 by 200 placed by its front left corner lies to the right of
+    and behind the click.
+  - Turned by 90 degrees, the column turns around the click.
+  - A beam placed by its bottom left corner lies to the right of the line
+    drawn, with its bottom face on the level of the beam.
+  - Changing the size keeps the placed point where it is.

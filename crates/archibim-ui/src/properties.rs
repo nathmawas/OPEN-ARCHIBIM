@@ -2,7 +2,9 @@
 //! in place. Every change becomes one command when the user lets go.
 
 use archibim_commands::Command;
-use archibim_model::{Beam, Column, Id, LayerRole, Opening, Project, Slab, Wall};
+use archibim_model::{
+    Align, Anchor, Beam, Column, Id, LayerRole, Opening, Project, Slab, Wall, WallReference,
+};
 use egui::{DragValue, Response, Ui};
 
 use crate::i18n::t;
@@ -126,61 +128,119 @@ impl Properties {
 /// widgets did.
 pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
     let mut edit = Edit::default();
-    let mut number = |ui: &mut Ui, key: &'static str, value: &mut f64, min: f64| {
-        ui.horizontal(|ui| {
-            ui.label(t(key));
-            let r = ui.add(
-                DragValue::new(value)
-                    .speed(5.0)
-                    .range(min..=1.0e6)
-                    .suffix(" mm"),
-            );
-            edit.track(&r);
-        });
-    };
-    {
-        match element {
-            Element::Wall(w) => {
-                ui.label(t("el.wall"));
-                for layer in &mut w.layers {
-                    number(ui, role_key(layer.role), &mut layer.thickness, 1.0);
-                }
-                number(ui, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
-                number(ui, "p.top_offset", &mut w.top.offset, -1.0e6);
+    let e = &mut edit;
+    match element {
+        Element::Wall(w) => {
+            ui.label(t("el.wall"));
+            for layer in &mut w.layers {
+                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
             }
-            Element::Slab(s) => {
-                ui.label(t("el.slab"));
-                for layer in &mut s.layers {
-                    number(ui, role_key(layer.role), &mut layer.thickness, 1.0);
-                }
-                number(ui, "p.top_offset", &mut s.top.offset, -1.0e6);
+            number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
+            number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
+            ui.label(t("settings.reference"));
+            for (reference, key) in [
+                (WallReference::LeftFace, "ref.left"),
+                (WallReference::Axis, "ref.axis"),
+                (WallReference::RightFace, "ref.right"),
+                (WallReference::LoadBearingLeft, "ref.bearing_left"),
+                (WallReference::LoadBearingRight, "ref.bearing_right"),
+            ] {
+                e.track(&ui.selectable_value(&mut w.reference, reference, t(key)));
             }
-            Element::Column(c) => {
-                ui.label(t("el.column"));
-                number(ui, "p.width", &mut c.width, 1.0);
-                number(ui, "p.depth", &mut c.depth, 1.0);
-                number(ui, "p.bottom_offset", &mut c.bottom.offset, -1.0e6);
-                number(ui, "p.top_offset", &mut c.top.offset, -1.0e6);
+        }
+        Element::Slab(s) => {
+            ui.label(t("el.slab"));
+            for layer in &mut s.layers {
+                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
             }
-            Element::Beam(b) => {
-                ui.label(t("el.beam"));
-                number(ui, "p.width", &mut b.width, 1.0);
-                number(ui, "p.height", &mut b.height, 1.0);
-                number(ui, "p.top_offset", &mut b.top.offset, -1.0e6);
-            }
-            Element::Opening(o) => {
-                ui.label(t("el.opening"));
-                number(ui, "p.position", &mut o.position, 0.0);
-                number(ui, "p.sill", &mut o.sill, -1.0e6);
-                number(ui, "p.height", &mut o.height, 1.0);
-                number(ui, "p.frame", &mut o.frame, 0.0);
-                for part in &mut o.parts {
-                    number(ui, "p.part", &mut part.width, 1.0);
-                }
+            number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
+        }
+        Element::Column(c) => {
+            ui.label(t("el.column"));
+            number(ui, e, "p.width", &mut c.width, 1.0);
+            number(ui, e, "p.depth", &mut c.depth, 1.0);
+            number(ui, e, "p.bottom_offset", &mut c.bottom.offset, -1.0e6);
+            number(ui, e, "p.top_offset", &mut c.top.offset, -1.0e6);
+            angle(ui, e, &mut c.angle);
+            // Seen in plan: the front edge at the bottom.
+            anchor(ui, e, &mut c.anchor, false);
+        }
+        Element::Beam(b) => {
+            ui.label(t("el.beam"));
+            number(ui, e, "p.width", &mut b.width, 1.0);
+            number(ui, e, "p.height", &mut b.height, 1.0);
+            number(ui, e, "p.level_offset", &mut b.level.offset, -1.0e6);
+            // Seen in section: the top face at the top.
+            anchor(ui, e, &mut b.anchor, true);
+        }
+        Element::Opening(o) => {
+            ui.label(t("el.opening"));
+            number(ui, e, "p.position", &mut o.position, 0.0);
+            number(ui, e, "p.sill", &mut o.sill, -1.0e6);
+            number(ui, e, "p.height", &mut o.height, 1.0);
+            number(ui, e, "p.frame", &mut o.frame, 0.0);
+            for part in &mut o.parts {
+                number(ui, e, "p.part", &mut part.width, 1.0);
             }
         }
     }
     edit
+}
+
+fn number(ui: &mut Ui, edit: &mut Edit, key: &'static str, value: &mut f64, min: f64) {
+    ui.horizontal(|ui| {
+        ui.label(t(key));
+        let r = ui.add(
+            DragValue::new(value)
+                .speed(5.0)
+                .range(min..=1.0e6)
+                .suffix(" mm"),
+        );
+        edit.track(&r);
+    });
+}
+
+/// An angle kept in radians, shown in degrees.
+fn angle(ui: &mut Ui, edit: &mut Edit, radians: &mut f64) {
+    ui.horizontal(|ui| {
+        ui.label(t("p.angle"));
+        let mut degrees = radians.to_degrees();
+        let r = ui.add(
+            DragValue::new(&mut degrees)
+                .speed(1.0)
+                .range(-360.0..=360.0)
+                .suffix(" °"),
+        );
+        if r.changed() {
+            *radians = degrees.to_radians();
+        }
+        edit.track(&r);
+    });
+}
+
+/// The anchor as a grid of nine points, the chosen one filled.
+fn anchor(ui: &mut Ui, edit: &mut Edit, anchor: &mut Anchor, first_on_top: bool) {
+    ui.label(t("p.anchor"));
+    let aligns = [Align::First, Align::Middle, Align::Last];
+    let rows: Vec<Align> = if first_on_top {
+        aligns.to_vec()
+    } else {
+        aligns.iter().rev().copied().collect()
+    };
+    egui::Grid::new(ui.next_auto_id()).show(ui, |ui| {
+        for depth in rows {
+            for width in aligns {
+                let point = Anchor { width, depth };
+                let mark = if *anchor == point { "●" } else { "○" };
+                let r = ui.selectable_label(*anchor == point, mark);
+                if r.clicked() {
+                    *anchor = point;
+                }
+                edit.track(&r);
+            }
+            ui.end_row();
+        }
+    });
 }
 
 fn role_key(role: LayerRole) -> &'static str {

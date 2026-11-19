@@ -73,10 +73,28 @@ pub struct Layer {
     pub framing: Option<Framing>,
 }
 
+/// Which line of a wall its `start` and `end` points lie on. Left and
+/// right are seen looking from `start` to `end`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WallReference {
+    /// The left face, where the first layer is.
+    #[default]
+    LeftFace,
+    /// The middle of the whole build-up.
+    Axis,
+    /// The right face, where the last layer is.
+    RightFace,
+    /// The left face of the load-bearing layers.
+    LoadBearingLeft,
+    /// The right face of the load-bearing layers.
+    LoadBearingRight,
+}
+
 /// A wall drawn along its reference line, from `start` to `end`.
 ///
-/// The reference line is the left face, looking from `start` to `end`.
-/// Layers are listed from the left face to the right face.
+/// Layers are listed from the left face to the right face, looking from
+/// `start` to `end`. When the build-up changes, the reference line stays
+/// where it is and the faces move.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wall {
     /// Permanent identifier.
@@ -87,6 +105,8 @@ pub struct Wall {
     pub start: Point,
     /// End of the reference line.
     pub end: Point,
+    /// Which line of the wall `start` and `end` lie on.
+    pub reference: WallReference,
     /// The build-up, from the left face to the right face.
     pub layers: Vec<Layer>,
     /// Bottom of the wall.
@@ -99,5 +119,42 @@ impl Wall {
     /// Total thickness of the build-up.
     pub fn thickness(&self) -> f64 {
         self.layers.iter().map(|l| l.thickness).sum()
+    }
+
+    /// How far the left face lies to the left of the reference line.
+    /// Without load-bearing layers, a load-bearing reference falls back on
+    /// the face on its side.
+    pub fn left_face_shift(&self) -> f64 {
+        let bearing = |l: &&Layer| l.role == LayerRole::LoadBearing;
+        let before = |i: usize| self.layers[..i].iter().map(|l| l.thickness).sum::<f64>();
+        match self.reference {
+            WallReference::LeftFace => 0.0,
+            WallReference::Axis => self.thickness() / 2.0,
+            WallReference::RightFace => self.thickness(),
+            WallReference::LoadBearingLeft => self
+                .layers
+                .iter()
+                .position(|l| bearing(&l))
+                .map_or(0.0, before),
+            WallReference::LoadBearingRight => self
+                .layers
+                .iter()
+                .rposition(|l| bearing(&l))
+                .map_or(self.thickness(), |i| before(i + 1)),
+        }
+    }
+
+    /// The left face, from the start end to the end end, or nothing if the
+    /// wall has no length.
+    pub fn left_face(&self) -> Option<(Point, Point)> {
+        let (dx, dy) = (self.end.x - self.start.x, self.end.y - self.start.y);
+        let length = (dx * dx + dy * dy).sqrt();
+        if length < 1e-9 {
+            return None;
+        }
+        let k = self.left_face_shift() / length;
+        // The left of (dx, dy) is (-dy, dx).
+        let shift = |p: Point| Point::new(p.x - dy * k, p.y + dx * k);
+        Some((shift(self.start), shift(self.end)))
     }
 }
