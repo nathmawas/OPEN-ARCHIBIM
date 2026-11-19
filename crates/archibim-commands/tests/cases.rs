@@ -926,3 +926,40 @@ fn views_3d_model() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn walls_drawing_methods() -> Result {
+    // The wall tool is tested in archibim-ui; here, the group command it
+    // relies on: four walls in one step, nothing kept if one is refused.
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    let corners = [(0.0, 0.0), (0.0, 4000.0), (6000.0, 4000.0), (6000.0, 0.0)];
+    let mut walls: Vec<Wall> = Vec::new();
+    for i in 0..4 {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        let id = f.wall(a, b, &[(concrete, 200.0)])?;
+        walls.push(f.h.project().wall(id)?.clone());
+    }
+    for _ in 0..4 {
+        f.h.undo()?;
+    }
+    let group = Command::Group(walls.iter().cloned().map(Command::AddWall).collect());
+    f.h.run(group)?;
+    assert_eq!(f.h.project().walls.len(), 4);
+    f.h.undo()?;
+    assert!(f.h.project().walls.is_empty(), "one undo, four walls");
+    f.h.redo()?;
+    assert_eq!(f.h.project().walls.len(), 4, "one redo, four walls");
+
+    let mut flat = walls[0].clone();
+    flat.id = f.h.new_id();
+    flat.layers[0].material = Id(u64::MAX);
+    let extra = Wall {
+        id: f.h.new_id(),
+        ..walls[1].clone()
+    };
+    let refused = Command::Group(vec![Command::AddWall(extra), Command::AddWall(flat)]);
+    assert!(f.h.run(refused).is_err(), "a material that does not exist");
+    assert_eq!(f.h.project().walls.len(), 4, "nothing of the group is kept");
+    Ok(())
+}
