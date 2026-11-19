@@ -1,0 +1,15 @@
+id: openings-reveal-returns
+title: Reveal returns belong to the wall, the frame position to the opening
+status: proposed
+given: |
+  The same window type is placed in two walls. Wall A has external
+  insulation (render 20, insulation 140, concrete 200, plaster 15). Wall B
+  is plain masonry (plaster 15, brick 200, plaster 15).
+expect:
+  - Wall A returns its insulation and render into the jambs and the head,
+    up to the frame; the sill has its own setting.
+  - Wall B returns only its plaster.
+  - The window only sets where its frame sits in the wall depth; it holds
+    no return setting.
+  - Changing the returns of wall A changes every opening in wall A, and
+    no opening elsewhere.

@@ -1,0 +1,13 @@
+id: walls-three-wall-node
+title: Three walls meeting at one point join with no overlap and no gap
+status: proposed
+given: |
+  Three walls of plaster 15, brick 200 and plaster 15 end at the same
+  point, at 0, 120 and 240 degrees.
+expect:
+  - Each layer of each wall stops against its neighbours around the point,
+    with no overlap and no gap.
+  - No wall runs past the point.
+  - The same holds with four, five or more walls at one point.
+  - With different build-ups, the layer priorities decide which layers pass,
+    as for two walls.

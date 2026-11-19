@@ -1,0 +1,13 @@
+id: walls-build-up-priority-warning
+title: An unusual priority order is flagged, never refused
+status: proposed
+given: |
+  A build-up of plaster 15, brick 200 and render 20, where the architect
+  sets the render to a higher priority than the brick.
+when: |
+  The architect applies the build-up to a wall.
+expect:
+  - The build-up is applied as the architect set it.
+  - A warning says that the render now passes through the brick at
+    junctions, and names the layers concerned.
+  - The warning can be dismissed for this build-up and does not come back.

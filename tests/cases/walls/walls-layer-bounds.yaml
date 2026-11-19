@@ -1,0 +1,17 @@
+id: walls-layer-bounds
+title: External insulation runs down past the slab at the foot of a ground floor wall
+status: proposed
+given: |
+  A ground floor wall with external insulation (render 20, insulation 140,
+  concrete 200, plaster 15) on story 0, running from the structural level
+  of story 0 to the structural level of story 1. Its layers share the
+  wall's bottom and top, as every wall does by default.
+when: |
+  At the foot of this wall, the architect sets the render and the
+  insulation to start 300 below the structural level of story 0, to cover
+  the slab edge.
+expect:
+  - The render and the insulation run down 300 below the structural level.
+  - The concrete and the plaster keep the wall's bottom.
+  - The setting belongs to this wall only; other walls keep shared bounds.
+  - When story 0 moves, every layer follows its own level.
