@@ -7,9 +7,9 @@
 use archibim_commands::{Command, History};
 use archibim_geometry::{LayerPlan, Phase, plan_layers, polygon_area};
 use archibim_model::{
-    Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind, LevelRef, Material, NominalSize,
-    Opening, OpeningKind, Operation, Part, Performance, Point, Project, RenovationStatus, Story,
-    Wall,
+    Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind, LevelRef, Material,
+    NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
+    RenovationStatus, Slab, Story, Wall,
 };
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -667,5 +667,146 @@ fn renovation_replace_insulation() -> Result {
         before,
         "undo brings the build-up back"
     );
+    Ok(())
+}
+
+#[test]
+fn openings_cut_the_wall() -> Result {
+    let mut f = Fixture::new()?;
+    let render = f.material("render", 1)?;
+    let insulation = f.material("insulation", 3)?;
+    let concrete = f.material("concrete", 9)?;
+    let plaster = f.material("plaster", 1)?;
+    let wall = f.wall(
+        (0.0, 0.0),
+        (5000.0, 0.0),
+        &[
+            (render, 20.0),
+            (insulation, 140.0),
+            (concrete, 200.0),
+            (plaster, 15.0),
+        ],
+    )?;
+    let id = f.h.new_id();
+    let window = Opening {
+        id,
+        wall,
+        kind: OpeningKind::Exterior(Performance::default()),
+        position: 1900.0,
+        sill: 900.0,
+        height: 1350.0,
+        frame: 60.0,
+        parts: vec![Part {
+            width: 1080.0,
+            operation: Operation::SideHung(Hand::Left),
+        }],
+        nominal: NominalSize::ClearOpening,
+    };
+    f.h.run(Command::AddOpening(window.clone()))?;
+    let plan = f.plan()?;
+    for i in 0..4 {
+        assert_eq!(layer(&plan, wall, i).len(), 2, "layer {i} is cut");
+    }
+    let t = 375.0;
+    assert!(
+        close(total_area(&plan), (5000.0 - 1200.0) * t),
+        "the hole is 1200 wide"
+    );
+    f.h.run(Command::ReplaceOpening(Opening {
+        position: 3000.0,
+        ..window
+    }))?;
+    let xs: Vec<f64> = layer(&f.plan()?, wall, 2)
+        .iter()
+        .flatten()
+        .map(|p| p.x)
+        .collect();
+    assert!(xs.iter().any(|&x| close(x, 3000.0)), "the cut follows");
+    Ok(())
+}
+
+#[test]
+fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    let level = |story| LevelRef {
+        story,
+        kind: LevelKind::Structural,
+        offset: 0.0,
+    };
+    let slab = Slab {
+        id: f.h.new_id(),
+        story: f.story0,
+        outline: [
+            (0.0, 0.0),
+            (4000.0, 0.0),
+            (4000.0, 2000.0),
+            (2000.0, 2000.0),
+            (2000.0, 4000.0),
+            (0.0, 4000.0),
+        ]
+        .iter()
+        .map(|&(x, y)| Point::new(x, y))
+        .collect(),
+        layers: vec![layer_of(LayerRole::LoadBearing, concrete, 200.0)],
+        top: level(f.story0),
+    };
+    f.h.run(Command::AddSlab(slab.clone()))?;
+    let flat = Slab {
+        id: f.h.new_id(),
+        outline: vec![Point::new(0.0, 0.0), Point::new(1000.0, 0.0)],
+        ..slab.clone()
+    };
+    assert!(f.h.run(Command::AddSlab(flat)).is_err(), "no area, refused");
+
+    let column = Column {
+        id: f.h.new_id(),
+        story: f.story0,
+        at: Point::new(1000.0, 1000.0),
+        width: 300.0,
+        depth: 300.0,
+        material: concrete,
+        bottom: level(f.story0),
+        top: level(f.story1),
+    };
+    f.h.run(Command::AddColumn(column.clone()))?;
+    let beam = Beam {
+        id: f.h.new_id(),
+        story: f.story0,
+        start: Point::new(0.0, 0.0),
+        end: Point::new(4000.0, 0.0),
+        width: 200.0,
+        height: 400.0,
+        material: concrete,
+        top: level(f.story1),
+    };
+    f.h.run(Command::AddBeam(beam.clone()))?;
+
+    let mut thick = slab.clone();
+    thick.layers[0].thickness = 250.0;
+    f.h.run(Command::ReplaceSlab(thick))?;
+    f.h.run(Command::ReplaceColumn(Column {
+        width: 400.0,
+        ..column.clone()
+    }))?;
+    f.h.run(Command::ReplaceBeam(Beam {
+        height: 500.0,
+        ..beam.clone()
+    }))?;
+    let p = f.h.project();
+    assert!(close(p.slab(slab.id)?.thickness(), 250.0));
+    assert!(close(p.column(column.id)?.width, 400.0));
+    assert!(close(p.beam(beam.id)?.height, 500.0));
+
+    for _ in 0..3 {
+        f.h.undo()?;
+    }
+    let p = f.h.project();
+    assert_eq!(p.slab(slab.id)?, &slab);
+    assert_eq!(p.column(column.id)?, &column);
+    assert_eq!(p.beam(beam.id)?, &beam);
+    f.h.run(Command::RemoveColumn(column.id))?;
+    f.h.undo()?;
+    assert_eq!(f.h.project().column(column.id)?, &column, "delete undone");
     Ok(())
 }

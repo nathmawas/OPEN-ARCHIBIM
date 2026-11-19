@@ -1,9 +1,10 @@
-//! Shapes derived from the model: wall layers in plan and their junctions.
+//! Shapes derived from the model: wall layers in plan and their junctions,
+//! outlines of openings, columns and beams, triangles for fills.
 //!
 //! Pure functions: nothing here keeps state or draws.
 
 use archibim_model::{
-    Framing, Id, JunctionMode, ModelError, Point, Project, RenovationStatus, Wall,
+    Beam, Column, Framing, Id, JunctionMode, ModelError, Point, Project, RenovationStatus, Wall,
 };
 
 /// Which state of the building to draw (renovation filter).
@@ -68,6 +69,23 @@ pub fn plan_layers(
             resolve(&mut states, i, j, mode);
         }
     }
+    // Openings cut every layer of their wall across its whole thickness.
+    // ponytail: no reveal returns yet (case openings-reveal-returns).
+    for opening in &project.openings {
+        if let Some(state) = states.iter_mut().find(|s| s.id == opening.wall) {
+            let across = |t: f64| Line {
+                p: add(state.frame.start, mul(state.frame.d, t)),
+                d: state.frame.r,
+            };
+            let gap = (
+                across(opening.position),
+                across(opening.position + opening.wall_opening_width()),
+            );
+            for band in &mut state.bands {
+                band.gaps.push(gap);
+            }
+        }
+    }
     Ok(states
         .iter()
         .flat_map(|s| {
@@ -82,6 +100,153 @@ pub fn plan_layers(
                 })
         })
         .collect())
+}
+
+/// The hole of an opening in plan: a rectangle across the whole thickness
+/// of its wall, as four corners (start face, then far face).
+pub fn opening_outline(project: &Project, opening: Id) -> Result<Vec<Point>, ModelError> {
+    let o = project.opening(opening)?;
+    let wall = project.wall(o.wall)?;
+    let d = unit(sub(wall.end, wall.start)).ok_or(ModelError::Invalid("a wall has no length"))?;
+    let r = Point::new(d.y, -d.x);
+    let a = add(wall.start, mul(d, o.position));
+    let b = add(wall.start, mul(d, o.position + o.wall_opening_width()));
+    let t = wall.thickness();
+    Ok(vec![a, b, add(b, mul(r, t)), add(a, mul(r, t))])
+}
+
+/// A column in plan.
+pub fn column_outline(column: &Column) -> Vec<Point> {
+    let (w, h) = (column.width / 2.0, column.depth / 2.0);
+    let c = column.at;
+    vec![
+        Point::new(c.x - w, c.y - h),
+        Point::new(c.x + w, c.y - h),
+        Point::new(c.x + w, c.y + h),
+        Point::new(c.x - w, c.y + h),
+    ]
+}
+
+/// A beam in plan, or nothing if it has no length.
+pub fn beam_outline(beam: &Beam) -> Option<Vec<Point>> {
+    let d = unit(sub(beam.end, beam.start))?;
+    let n = mul(Point::new(-d.y, d.x), beam.width / 2.0);
+    Some(vec![
+        add(beam.start, n),
+        add(beam.end, n),
+        sub(beam.end, n),
+        sub(beam.start, n),
+    ])
+}
+
+/// Is `p` inside the closed polygon?
+pub fn contains(polygon: &[Point], p: Point) -> bool {
+    let n = polygon.len();
+    let mut inside = false;
+    for i in 0..n {
+        let (a, b) = (polygon[i], polygon[(i + n - 1) % n]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// The edges to draw around a set of fills: an edge, or the part of it,
+/// that runs along a fill of the same material is left out, so that equal
+/// materials read as one continuous mass across junctions. Each piece comes
+/// with the index of the polygon it belongs to.
+// ponytail: O(e²) over every edge of the story; group by material or use
+// a spatial index when stories reach thousands of layers.
+pub fn visible_edges(polygons: &[(Id, &[Point])]) -> Vec<(usize, Point, Point)> {
+    const TOLERANCE: f64 = 0.5;
+    let edges = |polygon: &'_ [Point]| {
+        let n = polygon.len();
+        (0..n)
+            .map(move |i| (polygon[i], polygon[(i + 1) % n]))
+            .collect::<Vec<_>>()
+    };
+    let mut visible = Vec::new();
+    for (index, (material, polygon)) in polygons.iter().enumerate() {
+        for (a, b) in edges(polygon) {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let length = (dx * dx + dy * dy).sqrt();
+            if length < TOLERANCE {
+                continue;
+            }
+            // Covered stretches of [0, 1] along a→b.
+            let mut covered: Vec<(f64, f64)> = Vec::new();
+            for (other, (m, q)) in polygons.iter().enumerate() {
+                if other == index || m != material {
+                    continue;
+                }
+                for (c, d) in edges(q) {
+                    let off = |p: Point| ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / length;
+                    if off(c) > TOLERANCE || off(d) > TOLERANCE {
+                        continue;
+                    }
+                    let t = |p: Point| ((p.x - a.x) * dx + (p.y - a.y) * dy) / (length * length);
+                    let (t0, t1) = (t(c).min(t(d)).max(0.0), t(c).max(t(d)).min(1.0));
+                    if t1 > t0 {
+                        covered.push((t0, t1));
+                    }
+                }
+            }
+            covered.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let at = |t: f64| Point::new(a.x + dx * t, a.y + dy * t);
+            let mut from = 0.0;
+            for (t0, t1) in covered {
+                if (t0 - from) * length > TOLERANCE {
+                    visible.push((index, at(from), at(t0)));
+                }
+                from = f64::max(from, t1);
+            }
+            if (1.0 - from) * length > TOLERANCE {
+                visible.push((index, at(from), b));
+            }
+        }
+    }
+    visible
+}
+
+/// Splits a simple polygon (convex or not) into triangles, as indices into
+/// it. Ear clipping.
+// ponytail: O(n³) ear clipping; fine for slab outlines of a few dozen
+// points.
+pub fn triangulate(polygon: &[Point]) -> Vec<[usize; 3]> {
+    let n = polygon.len();
+    let mut left: Vec<usize> = (0..n).collect();
+    let signed: f64 = (0..n)
+        .map(|i| cross(polygon[i], polygon[(i + 1) % n]))
+        .sum();
+    if signed < 0.0 {
+        left.reverse();
+    }
+    let mut triangles = Vec::new();
+    while left.len() > 3 {
+        let m = left.len();
+        let ear = (0..m).find(|&k| {
+            let (a, b, c) = (
+                polygon[left[(k + m - 1) % m]],
+                polygon[left[k]],
+                polygon[left[(k + 1) % m]],
+            );
+            cross(sub(b, a), sub(c, b)) > 1e-9
+                && left.iter().all(|&q| {
+                    let p = polygon[q];
+                    p == a || p == b || p == c || !contains(&[a, b, c], p)
+                })
+        });
+        let Some(k) = ear else {
+            break;
+        };
+        triangles.push([left[(k + m - 1) % m], left[k], left[(k + 1) % m]]);
+        left.remove(k);
+    }
+    if left.len() == 3 {
+        triangles.push([left[0], left[1], left[2]]);
+    }
+    triangles
 }
 
 /// Area of a closed polygon.
@@ -510,5 +675,57 @@ fn resolve(states: &mut [WallState], i: usize, j: usize, mode: Option<JunctionMo
         if inside(a) && inside(b) {
             crossing(states, i, j);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_edge_is_hidden_between_equal_materials_only() {
+        let square = |x: f64| {
+            vec![
+                Point::new(x, 0.0),
+                Point::new(x + 1000.0, 0.0),
+                Point::new(x + 1000.0, 1000.0),
+                Point::new(x, 1000.0),
+            ]
+        };
+        // The right square is taller: only the shared stretch disappears.
+        let (left, mut right) = (square(0.0), square(1000.0));
+        right[2].y = 2000.0;
+        right[3].y = 2000.0;
+        let (brick, wood) = (Id(1), Id(2));
+        let same = visible_edges(&[(brick, &left), (brick, &right)]);
+        assert_eq!(same.len(), 7, "{same:?}");
+        assert!(
+            same.iter()
+                .all(|(_, a, b)| !(a.x == 1000.0 && b.x == 1000.0 && a.y.max(b.y) <= 1000.0))
+        );
+        assert_eq!(visible_edges(&[(brick, &left), (wood, &right)]).len(), 8);
+    }
+
+    #[test]
+    fn an_l_shaped_outline_splits_into_triangles_covering_it() {
+        let l = [
+            Point::new(0.0, 0.0),
+            Point::new(4.0, 0.0),
+            Point::new(4.0, 2.0),
+            Point::new(2.0, 2.0),
+            Point::new(2.0, 4.0),
+            Point::new(0.0, 4.0),
+        ];
+        for outline in [l.to_vec(), l.iter().rev().copied().collect()] {
+            let triangles = triangulate(&outline);
+            assert_eq!(triangles.len(), 4);
+            let area: f64 = triangles
+                .iter()
+                .map(|t| polygon_area(&[outline[t[0]], outline[t[1]], outline[t[2]]]))
+                .sum();
+            assert!((area - 12.0).abs() < 1e-9, "the triangles cover the L");
+        }
+        assert!(contains(&l, Point::new(1.0, 3.0)));
+        assert!(!contains(&l, Point::new(3.0, 3.0)), "the notch is outside");
     }
 }

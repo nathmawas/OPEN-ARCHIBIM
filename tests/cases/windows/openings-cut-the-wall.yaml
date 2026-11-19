@@ -1,0 +1,16 @@
+id: openings-cut-the-wall
+title: An opening cuts every layer of its wall
+status: proposed
+given: |
+  The wall of walls-l-corner-same-build-up (render 20, insulation 140,
+  concrete 200, plaster 15), 5000 long.
+when: |
+  The architect clicks on the wall with the opening tool, set to a window
+  of 1080 clear width with a 60 frame.
+expect:
+  - The opening is centred on the click, along the wall.
+  - Every layer is cut over the width of the hole, 1200 (the parts and
+    the frame on both sides).
+  - The plan shows the frame and the glass of a window, or the leaf and
+    its swing for a door.
+  - Moving the opening in the properties palette moves the cut.

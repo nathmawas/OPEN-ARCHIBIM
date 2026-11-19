@@ -1,0 +1,15 @@
+id: slabs-generic-outline
+title: A slab is drawn by its outline, with a build-up and a top level
+status: proposed
+given: |
+  Story 0 at level 0. A slab build-up of concrete 200.
+when: |
+  The architect draws an L-shaped outline of six points and closes it, by
+  clicking the first point again or pressing Enter.
+expect:
+  - The slab follows the outline, notch included.
+  - Its top face is at the structural level of story 0, its underside 200
+    lower.
+  - The thickness and the top offset can be changed in the properties
+    palette; undo restores them.
+  - An outline of fewer than three points, or with no area, is refused.

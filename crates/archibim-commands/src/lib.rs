@@ -3,8 +3,8 @@
 //! and the elements it changed.
 
 use archibim_model::{
-    Id, JunctionMode, Layer, Material, ModelError, Opening, OpeningKind, Operation, Part, Project,
-    Story, Wall,
+    Beam, Column, Id, JunctionMode, Layer, Material, ModelError, Opening, OpeningKind, Operation,
+    Part, Project, Slab, Story, Wall,
 };
 
 /// A change to the model.
@@ -84,8 +84,29 @@ pub enum Command {
         /// Interior or exterior.
         kind: OpeningKind,
     },
-    /// Replaces an opening with a previous state of itself (used by undo).
+    /// Replaces an opening with a new state of itself, same identifier.
     ReplaceOpening(Opening),
+    /// Replaces a wall with a new state of itself, same identifier: its
+    /// openings and junctions are kept.
+    ReplaceWall(Wall),
+    /// Adds a slab.
+    AddSlab(Slab),
+    /// Removes a slab.
+    RemoveSlab(Id),
+    /// Replaces a slab with a new state of itself, same identifier.
+    ReplaceSlab(Slab),
+    /// Adds a column.
+    AddColumn(Column),
+    /// Removes a column.
+    RemoveColumn(Id),
+    /// Replaces a column with a new state of itself, same identifier.
+    ReplaceColumn(Column),
+    /// Adds a beam.
+    AddBeam(Beam),
+    /// Removes a beam.
+    RemoveBeam(Id),
+    /// Replaces a beam with a new state of itself, same identifier.
+    ReplaceBeam(Beam),
 }
 
 /// The result of applying a command.
@@ -238,6 +259,41 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             let old = std::mem::replace(o, new);
             let wall = old.wall;
             applied(ReplaceOpening(old), vec![id, wall])
+        }
+        ReplaceWall(new) => {
+            let id = new.id;
+            let old = project.replace_wall(new)?;
+            applied(ReplaceWall(old), vec![id])
+        }
+        AddSlab(slab) => {
+            let id = slab.id;
+            project.insert_slab(slab)?;
+            applied(RemoveSlab(id), vec![id])
+        }
+        RemoveSlab(id) => applied(AddSlab(project.remove_slab(id)?), vec![id]),
+        ReplaceSlab(new) => {
+            let id = new.id;
+            applied(ReplaceSlab(project.replace_slab(new)?), vec![id])
+        }
+        AddColumn(column) => {
+            let id = column.id;
+            project.insert_column(column)?;
+            applied(RemoveColumn(id), vec![id])
+        }
+        RemoveColumn(id) => applied(AddColumn(project.remove_column(id)?), vec![id]),
+        ReplaceColumn(new) => {
+            let id = new.id;
+            applied(ReplaceColumn(project.replace_column(new)?), vec![id])
+        }
+        AddBeam(beam) => {
+            let id = beam.id;
+            project.insert_beam(beam)?;
+            applied(RemoveBeam(id), vec![id])
+        }
+        RemoveBeam(id) => applied(AddBeam(project.remove_beam(id)?), vec![id]),
+        ReplaceBeam(new) => {
+            let id = new.id;
+            applied(ReplaceBeam(project.replace_beam(new)?), vec![id])
         }
     }
 }

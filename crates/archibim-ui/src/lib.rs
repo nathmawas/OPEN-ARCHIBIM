@@ -1,144 +1,318 @@
 //! Windows, tools and palettes of OPEN-ARCHIBIM. Turns user gestures into
 //! commands; never changes the model directly.
 
+mod i18n;
+mod plan;
+mod properties;
 mod wall_tool;
 
-use archibim_commands::History;
-use archibim_geometry::LayerPlan;
-use archibim_model::{LayerRole, Point, Project, Wall};
-use egui::{Color32, Key, Modifiers, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
+use archibim_commands::{Command, History};
+use archibim_geometry::{LayerPlan, beam_outline, column_outline, contains, opening_outline};
+use archibim_model::{Beam, Column, Id, Opening, Point, Project, Slab, Wall};
+use egui::{Key, Modifiers, Sense, Ui};
 
+pub use i18n::t;
+use plan::PlanView;
+pub use properties::{Element, Properties};
 pub use wall_tool::WallTool;
 
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
 
-/// A plan view: draws the wall layers of a story, with pan and zoom, and
-/// lets the user draw walls.
+/// The elements each tool copies when it draws.
 #[derive(Clone, Debug)]
-pub struct PlanView {
-    /// Screen pixels per millimetre; 0 until the view is fitted.
-    scale: f32,
-    /// Model point (in millimetres) at the centre of the view.
-    centre: Vec2,
-    /// The wall tool, with the wall it draws.
-    pub wall_tool: WallTool,
+pub struct Templates {
+    /// Build-up, story and heights of new walls.
+    pub wall: Wall,
+    /// Build-up and level of new slabs; the outline is drawn.
+    pub slab: Slab,
+    /// Size, material and heights of new columns.
+    pub column: Column,
+    /// Size, material and level of new beams.
+    pub beam: Beam,
+    /// A window; its wall and position are set where it is placed.
+    pub window: Opening,
+    /// A door; its wall and position are set where it is placed.
+    pub door: Opening,
 }
 
-impl PlanView {
-    /// A plan view whose wall tool draws copies of `template`.
-    pub fn new(template: Wall) -> Self {
+/// The tool the plan's clicks go to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// Picks an element to show in the properties palette.
+    Select,
+    /// Draws walls.
+    Wall,
+    /// Draws slab outlines.
+    Slab,
+    /// Places columns.
+    Column,
+    /// Draws beams.
+    Beam,
+    /// Places a window or a door in a wall.
+    Opening,
+}
+
+/// The working window: tools on the left, the plan in the middle, the
+/// properties on the right.
+#[derive(Debug)]
+pub struct Workspace {
+    view: PlanView,
+    tool: Tool,
+    templates: Templates,
+    wall: WallTool,
+    slab_points: Vec<Point>,
+    beam_start: Option<Point>,
+    door: bool,
+    selection: Option<Id>,
+    properties: Properties,
+    message: Option<String>,
+}
+
+impl Workspace {
+    /// A workspace whose tools draw copies of `templates`.
+    pub fn new(templates: Templates) -> Self {
         Self {
-            scale: 0.0,
-            centre: Vec2::ZERO,
-            wall_tool: WallTool::new(template),
+            view: PlanView::default(),
+            tool: Tool::Select,
+            wall: WallTool::new(templates.wall.clone()),
+            templates,
+            slab_points: Vec::new(),
+            beam_start: None,
+            door: false,
+            selection: None,
+            properties: Properties::default(),
+            message: None,
         }
     }
 
-    /// Draws `plan` in the whole available space and handles the user's
-    /// gestures. Returns true when the project changed.
-    ///
-    /// - Middle or right drag pans, the wheel zooms around the pointer,
-    ///   Home fits the drawing.
-    /// - Click, click draws a wall; the next one starts where the last
-    ///   ended. Typing a length then Enter sets it exactly. Shift keeps the
-    ///   wall horizontal or vertical. Escape stops.
-    /// - Ctrl+Z undoes, Ctrl+Y or Ctrl+Shift+Z redoes.
+    /// Shows the whole workspace. Returns true when the project changed.
     pub fn show(&mut self, ui: &mut Ui, history: &mut History, plan: &[LayerPlan]) -> bool {
-        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
-        let rect = response.rect;
-        painter.rect_filled(rect, 0.0, Color32::WHITE);
-
-        if self.scale <= 0.0 || ui.input(|i| i.key_pressed(Key::Home)) {
-            self.fit(rect, plan);
-        }
-        if response.dragged_by(egui::PointerButton::Middle)
-            || response.dragged_by(egui::PointerButton::Secondary)
-        {
-            self.centre -= response.drag_delta() / self.scale * Vec2::new(1.0, -1.0);
-        }
-        if let Some(pointer) = response.hover_pos() {
-            let wheel = ui.input(|i| i.smooth_scroll_delta.y);
-            let factor = (wheel * 0.002).exp() * ui.input(|i| i.zoom_delta());
-            if factor != 1.0 {
-                let before = self.to_model(rect, pointer);
-                self.scale = (self.scale * factor).clamp(1e-4, 50.0);
-                self.centre += before - self.to_model(rect, pointer);
+        let mut changed = false;
+        egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
+        egui::Panel::right("properties").show(ui, |ui| {
+            if let Some(command) = self.properties.show(ui, history.project(), self.selection) {
+                changed |= self.run(history, command);
             }
-        }
-
-        // The pointer in the model, snapped to wall ends and, with Shift,
-        // to the horizontal or vertical of the wall start.
-        let shift = ui.input(|i| i.modifiers.shift);
-        let cursor = response.hover_pos().map(|p| {
-            let p = self.to_model(rect, p);
-            let mut p = Point::new(f64::from(p.x), f64::from(p.y));
-            let snap = f64::from(SNAP_PX / self.scale);
-            if let Some(end) = nearest_end(history.project(), p, snap) {
-                p = end;
-            } else if shift && let Some(start) = self.wall_tool.start() {
-                p = orthogonal(start, p);
-            }
-            p
         });
-        let mut changed = self.keys(ui, history, cursor);
+        egui::Panel::bottom("status").show(ui, |ui| {
+            ui.label(self.message.as_deref().unwrap_or(""));
+        });
+        egui::CentralPanel::default().show(ui, |ui| {
+            changed |= self.plan(ui, history, plan);
+        });
+        if self
+            .selection
+            .is_some_and(|id| Element::find(history.project(), id).is_none())
+        {
+            self.selection = None;
+        }
+        changed
+    }
 
+    fn tools(&mut self, ui: &mut Ui) {
+        let before = self.tool;
+        for (tool, key) in [
+            (Tool::Select, "tool.select"),
+            (Tool::Wall, "tool.wall"),
+            (Tool::Slab, "tool.slab"),
+            (Tool::Column, "tool.column"),
+            (Tool::Beam, "tool.beam"),
+            (Tool::Opening, "tool.opening"),
+        ] {
+            ui.selectable_value(&mut self.tool, tool, t(key));
+        }
+        if self.tool == Tool::Opening {
+            ui.separator();
+            ui.selectable_value(&mut self.door, false, t("preset.window"));
+            ui.selectable_value(&mut self.door, true, t("preset.door"));
+        }
+        if self.tool != before {
+            self.stop();
+        }
+    }
+
+    fn stop(&mut self) {
+        self.wall.stop();
+        self.slab_points.clear();
+        self.beam_start = None;
+    }
+
+    fn run(&mut self, history: &mut History, command: Command) -> bool {
+        match history.run(command) {
+            Ok(_) => {
+                self.message = None;
+                true
+            }
+            Err(e) => {
+                // ponytail: model errors are shown in English; translate
+                // them once they carry a language pack key.
+                self.message = Some(format!("{} {e}", t("status.refused")));
+                false
+            }
+        }
+    }
+
+    fn plan(&mut self, ui: &mut Ui, history: &mut History, plan: &[LayerPlan]) -> bool {
+        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+        self.view.navigate(ui, &response, plan);
+
+        let snap = f64::from(SNAP_PX / self.view.scale());
+        let shift = ui.input(|i| i.modifiers.shift);
+        let from = self
+            .wall
+            .start()
+            .or(self.beam_start)
+            .or(self.slab_points.last().copied());
+        let cursor = response.hover_pos().map(|p| {
+            let p = self.view.model(p);
+            match nearest_point(history.project(), &self.slab_points, p, snap) {
+                Some(q) => q,
+                None => match from {
+                    Some(start) if shift => orthogonal(start, p),
+                    _ => p,
+                },
+            }
+        });
+
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        let mut changed = !typing && self.keys(ui, history, cursor);
         if response.clicked()
             && let Some(p) = cursor
         {
-            changed |= self.wall_tool.click(history, p);
+            changed |= self.click(history, plan, p, snap);
         }
 
-        self.paint(&painter, rect, history.project(), plan);
-        if let (Some(start), Some(p)) = (self.wall_tool.start(), cursor) {
-            let end = self.wall_tool.typed_end(start, p).unwrap_or(p);
-            let line = [self.to_screen(rect, start), self.to_screen(rect, end)];
-            painter.line_segment(line, Stroke::new(1.5, Color32::from_rgb(0, 110, 200)));
-            let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
-            let label = match self.wall_tool.typed() {
-                "" => format!("{length:.0}"),
-                typed => typed.to_owned(),
-            };
-            painter.text(
-                line[1] + Vec2::new(12.0, -12.0),
-                egui::Align2::LEFT_BOTTOM,
-                label,
-                egui::FontId::proportional(14.0),
-                Color32::from_rgb(0, 110, 200),
-            );
-        }
-        if self.wall_tool.start().is_some() {
+        self.view
+            .paint(&painter, history.project(), plan, self.selection);
+        self.view.preview(
+            &painter,
+            &self.wall,
+            &self.slab_points,
+            self.beam_start,
+            cursor,
+        );
+        if from.is_some() {
             ui.ctx().request_repaint();
         }
         changed
     }
 
-    /// Keyboard: undo, redo, and the wall tool's typed length.
+    fn click(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
+        match self.tool {
+            Tool::Select => {
+                self.selection = hit(history.project(), plan, p);
+                false
+            }
+            Tool::Wall => self.wall.click(history, p),
+            Tool::Slab => {
+                let closes = self.slab_points.len() >= 3
+                    && self
+                        .slab_points
+                        .first()
+                        .is_some_and(|q| distance(*q, p) <= snap);
+                if closes {
+                    self.close_slab(history)
+                } else {
+                    self.slab_points.push(p);
+                    false
+                }
+            }
+            Tool::Column => {
+                let column = Column {
+                    id: history.new_id(),
+                    at: p,
+                    ..self.templates.column.clone()
+                };
+                self.run(history, Command::AddColumn(column))
+            }
+            Tool::Beam => match self.beam_start.take() {
+                None => {
+                    self.beam_start = Some(p);
+                    false
+                }
+                Some(start) => {
+                    let beam = Beam {
+                        id: history.new_id(),
+                        start,
+                        end: p,
+                        ..self.templates.beam.clone()
+                    };
+                    self.run(history, Command::AddBeam(beam))
+                }
+            },
+            Tool::Opening => {
+                let template = if self.door {
+                    self.templates.door.clone()
+                } else {
+                    self.templates.window.clone()
+                };
+                let Some((wall, along, length)) = wall_at(history.project(), plan, p) else {
+                    return false;
+                };
+                let width = template.wall_opening_width();
+                let opening = Opening {
+                    id: history.new_id(),
+                    wall,
+                    position: (along - width / 2.0).clamp(0.0, (length - width).max(0.0)),
+                    ..template
+                };
+                self.run(history, Command::AddOpening(opening))
+            }
+        }
+    }
+
+    fn close_slab(&mut self, history: &mut History) -> bool {
+        let outline = std::mem::take(&mut self.slab_points);
+        let slab = Slab {
+            id: history.new_id(),
+            outline,
+            ..self.templates.slab.clone()
+        };
+        self.run(history, Command::AddSlab(slab))
+    }
+
+    /// Keyboard: undo, redo, delete, escape, and the typed lengths.
     fn keys(&mut self, ui: &Ui, history: &mut History, cursor: Option<Point>) -> bool {
-        let (undo, redo) = ui.input_mut(|i| {
+        let (undo, redo, delete) = ui.input_mut(|i| {
             let redo = i.consume_key(Modifiers::COMMAND, Key::Y)
                 || i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
-            (i.consume_key(Modifiers::COMMAND, Key::Z), redo)
+            let undo = i.consume_key(Modifiers::COMMAND, Key::Z);
+            (undo, redo, i.key_pressed(Key::Delete))
         });
         let mut changed = false;
-        if undo {
-            self.wall_tool.stop();
-            changed |= matches!(history.undo(), Ok(Some(_)));
+        if undo || redo {
+            self.stop();
+            let done = if undo { history.undo() } else { history.redo() };
+            changed |= matches!(done, Ok(Some(_)));
         }
-        if redo {
-            self.wall_tool.stop();
-            changed |= matches!(history.redo(), Ok(Some(_)));
+        if delete
+            && let Some(element) = self
+                .selection
+                .and_then(|id| Element::find(history.project(), id))
+        {
+            changed |= self.run(history, element.remove());
         }
         let events = ui.input(|i| i.events.clone());
         for event in events {
             match event {
-                egui::Event::Text(text) => text.chars().for_each(|c| self.wall_tool.type_char(c)),
+                egui::Event::Text(text) if self.tool == Tool::Wall => {
+                    text.chars().for_each(|c| self.wall.type_char(c));
+                }
                 egui::Event::Key {
                     key, pressed: true, ..
                 } => match key {
-                    Key::Backspace => self.wall_tool.erase(),
-                    Key::Escape => self.wall_tool.stop(),
-                    Key::Enter => changed |= self.wall_tool.enter(history, cursor),
+                    Key::Backspace => self.wall.erase(),
+                    Key::Escape => {
+                        self.stop();
+                        self.selection = None;
+                    }
+                    Key::Enter if self.tool == Tool::Wall => {
+                        changed |= self.wall.enter(history, cursor);
+                    }
+                    Key::Enter if self.tool == Tool::Slab => {
+                        changed |= self.close_slab(history);
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -146,62 +320,24 @@ impl PlanView {
         }
         changed
     }
-
-    fn paint(&self, painter: &egui::Painter, rect: Rect, project: &Project, plan: &[LayerPlan]) {
-        let outline = Stroke::new(1.0, Color32::from_gray(40));
-        for layer in plan {
-            let role = project
-                .wall(layer.wall)
-                .ok()
-                .and_then(|w| w.layers.get(layer.layer))
-                .map(|l| l.role);
-            let fill = role.map_or(Color32::LIGHT_GRAY, fill_of);
-            // ponytail: convex fills only; wall pieces are quadrilaterals
-            // today. Triangulate when a piece can be concave.
-            let pieces = layer.polygons.iter().map(|p| (p, fill));
-            let members = layer.members.iter().map(|p| (p, MEMBER));
-            for (polygon, fill) in pieces.chain(members) {
-                let points = polygon.iter().map(|p| self.to_screen(rect, *p)).collect();
-                painter.add(Shape::convex_polygon(points, fill, outline));
-            }
-        }
-    }
-
-    fn fit(&mut self, rect: Rect, plan: &[LayerPlan]) {
-        let points = plan.iter().flat_map(|l| &l.polygons).flatten();
-        let mut bounds = Rect::NOTHING;
-        for p in points {
-            bounds.extend_with(Pos2::new(p.x as f32, p.y as f32));
-        }
-        if !bounds.is_positive() {
-            self.scale = 0.05;
-            return;
-        }
-        self.centre = bounds.center().to_vec2();
-        self.scale = 0.9 * (rect.width() / bounds.width()).min(rect.height() / bounds.height());
-    }
-
-    fn to_screen(&self, rect: Rect, p: Point) -> Pos2 {
-        let d = Vec2::new(p.x as f32, p.y as f32) - self.centre;
-        rect.center() + Vec2::new(d.x, -d.y) * self.scale
-    }
-
-    fn to_model(&self, rect: Rect, p: Pos2) -> Vec2 {
-        let d = (p - rect.center()) / self.scale;
-        self.centre + Vec2::new(d.x, -d.y)
-    }
 }
 
-/// The wall end closest to `p`, if closer than `tolerance`.
-// ponytail: scans every wall; use a spatial index when projects get large.
-fn nearest_end(project: &Project, p: Point, tolerance: f64) -> Option<Point> {
-    let distance = |q: &Point| ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
+fn distance(a: Point, b: Point) -> f64 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+/// The wall end or slab corner closest to `p`, if closer than `tolerance`.
+// ponytail: scans every element; use a spatial index when projects get
+// large.
+fn nearest_point(project: &Project, drawing: &[Point], p: Point, tolerance: f64) -> Option<Point> {
     project
         .walls
         .iter()
         .flat_map(|w| [w.start, w.end])
-        .filter(|q| distance(q) <= tolerance)
-        .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+        .chain(project.slabs.iter().flat_map(|s| s.outline.iter().copied()))
+        .chain(drawing.iter().copied())
+        .filter(|q| distance(*q, p) <= tolerance)
+        .min_by(|a, b| distance(*a, p).total_cmp(&distance(*b, p)))
 }
 
 /// `p` moved onto the horizontal or the vertical through `start`, whichever
@@ -214,22 +350,55 @@ fn orthogonal(start: Point, p: Point) -> Point {
     }
 }
 
-/// Fill colour of framing members (studs, joists).
-const MEMBER: Color32 = Color32::from_rgb(160, 110, 60);
+/// The element under `p`: openings first, then columns, beams, walls and
+/// slabs.
+fn hit(project: &Project, plan: &[LayerPlan], p: Point) -> Option<Id> {
+    let opening = project
+        .openings
+        .iter()
+        .map(|o| o.id)
+        .find(|&id| opening_outline(project, id).is_ok_and(|outline| contains(&outline, p)));
+    let column = || {
+        project
+            .columns
+            .iter()
+            .find(|c| contains(&column_outline(c), p))
+            .map(|c| c.id)
+    };
+    let beam = || {
+        project
+            .beams
+            .iter()
+            .find(|b| beam_outline(b).is_some_and(|o| contains(&o, p)))
+            .map(|b| b.id)
+    };
+    let wall = || wall_at(project, plan, p).map(|(id, _, _)| id);
+    let slab = || {
+        project
+            .slabs
+            .iter()
+            .find(|s| contains(&s.outline, p))
+            .map(|s| s.id)
+    };
+    opening
+        .or_else(column)
+        .or_else(beam)
+        .or_else(wall)
+        .or_else(slab)
+}
 
-/// Fill colour of a layer by its constructive role.
-// ponytail: fixed colours per role; replaced by the material's own
-// appearance once materials carry parameters.
-fn fill_of(role: LayerRole) -> Color32 {
-    match role {
-        LayerRole::LoadBearing => Color32::from_rgb(190, 120, 100),
-        LayerRole::Insulation => Color32::from_rgb(250, 225, 120),
-        LayerRole::AirGap => Color32::WHITE,
-        LayerRole::Membrane => Color32::from_rgb(90, 90, 160),
-        LayerRole::Lining => Color32::from_rgb(210, 180, 140),
-        LayerRole::Finish => Color32::from_rgb(225, 225, 225),
-        LayerRole::Covering => Color32::from_rgb(150, 150, 150),
-    }
+/// The wall under `p`, with the distance of `p` along it and its length.
+fn wall_at(project: &Project, plan: &[LayerPlan], p: Point) -> Option<(Id, f64, f64)> {
+    let id = plan
+        .iter()
+        .find(|l| l.polygons.iter().any(|poly| contains(poly, p)))
+        .map(|l| l.wall)?;
+    let w = project.wall(id).ok()?;
+    let length = distance(w.start, w.end);
+    let along = ((p.x - w.start.x) * (w.end.x - w.start.x)
+        + (p.y - w.start.y) * (w.end.y - w.start.y))
+        / length;
+    Some((id, along, length))
 }
 
 #[cfg(test)]

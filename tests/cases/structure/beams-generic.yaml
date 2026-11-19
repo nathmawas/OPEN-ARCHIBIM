@@ -1,0 +1,13 @@
+id: beams-generic
+title: A beam is drawn between two points
+status: proposed
+given: |
+  A concrete beam of 200 wide by 400 high, its top at the structural level
+  of story 1.
+when: |
+  The architect clicks two points with the beam tool.
+expect:
+  - The beam runs from the first point to the second, centred on that line.
+  - It is drawn dashed in the plan, as it sits above the cut.
+  - Its width, height and top offset can be changed in the properties
+    palette.
