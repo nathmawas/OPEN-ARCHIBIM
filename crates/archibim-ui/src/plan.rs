@@ -1,6 +1,8 @@
 //! The plan view: navigation and drawing of the model.
 
-use archibim_geometry::{LayerPlan, beam_outline, column_outline, opening_outline, triangulate};
+use archibim_geometry::{
+    LayerPlan, beam_outline, column_outline, opening_outline, triangulate, visible_edges,
+};
 use archibim_model::{Id, LayerRole, Point, Project};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
@@ -90,16 +92,20 @@ impl PlanView {
         Point::new(f64::from(m.x), f64::from(m.y))
     }
 
-    fn polygon(&self, painter: &Painter, outline: &[Point], fill: Color32, stroke: Stroke) {
-        let points: Vec<Pos2> = outline.iter().map(|p| self.screen(*p)).collect();
+    fn fill(&self, painter: &Painter, outline: &[Point], fill: Color32) {
         let mut mesh = Mesh::default();
-        for p in &points {
-            mesh.colored_vertex(*p, fill);
+        for p in outline {
+            mesh.colored_vertex(self.screen(*p), fill);
         }
         for [a, b, c] in triangulate(outline) {
             mesh.add_triangle(a as u32, b as u32, c as u32);
         }
         painter.add(Shape::mesh(mesh));
+    }
+
+    fn polygon(&self, painter: &Painter, outline: &[Point], fill: Color32, stroke: Stroke) {
+        self.fill(painter, outline, fill);
+        let points: Vec<Pos2> = outline.iter().map(|p| self.screen(*p)).collect();
         painter.add(Shape::closed_line(points, stroke));
     }
 
@@ -123,19 +129,28 @@ impl PlanView {
         for slab in &project.slabs {
             self.polygon(painter, &slab.outline, SLAB, stroke(slab.id));
         }
+        // Fills first, then only the edges between different materials, so
+        // equal materials run on through junctions without a seam.
+        let mut pieces: Vec<(Id, &[Point])> = Vec::new();
+        let mut owners = Vec::new();
         for layer in plan {
-            let role = project
+            let found = project
                 .wall(layer.wall)
                 .ok()
-                .and_then(|w| w.layers.get(layer.layer))
-                .map(|l| l.role);
-            let fill = role.map_or(Color32::LIGHT_GRAY, fill_of);
+                .and_then(|w| w.layers.get(layer.layer));
+            let fill = found.map_or(Color32::LIGHT_GRAY, |l| fill_of(l.role));
+            let material = found.map_or(Id(u64::MAX), |l| l.material);
             for polygon in &layer.polygons {
-                self.polygon(painter, polygon, fill, stroke(layer.wall));
+                self.fill(painter, polygon, fill);
+                pieces.push((material, polygon));
+                owners.push(layer.wall);
             }
-            for member in &layer.members {
-                self.polygon(painter, member, MEMBER, Stroke::new(1.0, INK));
-            }
+        }
+        for (index, a, b) in visible_edges(&pieces) {
+            painter.line_segment([self.screen(a), self.screen(b)], stroke(owners[index]));
+        }
+        for member in plan.iter().flat_map(|l| &l.members) {
+            self.polygon(painter, member, MEMBER, Stroke::new(1.0, INK));
         }
         for opening in &project.openings {
             self.opening(painter, project, opening.id, stroke(opening.id));

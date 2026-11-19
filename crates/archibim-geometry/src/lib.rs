@@ -152,6 +152,63 @@ pub fn contains(polygon: &[Point], p: Point) -> bool {
     inside
 }
 
+/// The edges to draw around a set of fills: an edge, or the part of it,
+/// that runs along a fill of the same material is left out, so that equal
+/// materials read as one continuous mass across junctions. Each piece comes
+/// with the index of the polygon it belongs to.
+// ponytail: O(e²) over every edge of the story; group by material or use
+// a spatial index when stories reach thousands of layers.
+pub fn visible_edges(polygons: &[(Id, &[Point])]) -> Vec<(usize, Point, Point)> {
+    const TOLERANCE: f64 = 0.5;
+    let edges = |polygon: &'_ [Point]| {
+        let n = polygon.len();
+        (0..n)
+            .map(move |i| (polygon[i], polygon[(i + 1) % n]))
+            .collect::<Vec<_>>()
+    };
+    let mut visible = Vec::new();
+    for (index, (material, polygon)) in polygons.iter().enumerate() {
+        for (a, b) in edges(polygon) {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let length = (dx * dx + dy * dy).sqrt();
+            if length < TOLERANCE {
+                continue;
+            }
+            // Covered stretches of [0, 1] along a→b.
+            let mut covered: Vec<(f64, f64)> = Vec::new();
+            for (other, (m, q)) in polygons.iter().enumerate() {
+                if other == index || m != material {
+                    continue;
+                }
+                for (c, d) in edges(q) {
+                    let off = |p: Point| ((p.x - a.x) * dy - (p.y - a.y) * dx).abs() / length;
+                    if off(c) > TOLERANCE || off(d) > TOLERANCE {
+                        continue;
+                    }
+                    let t = |p: Point| ((p.x - a.x) * dx + (p.y - a.y) * dy) / (length * length);
+                    let (t0, t1) = (t(c).min(t(d)).max(0.0), t(c).max(t(d)).min(1.0));
+                    if t1 > t0 {
+                        covered.push((t0, t1));
+                    }
+                }
+            }
+            covered.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let at = |t: f64| Point::new(a.x + dx * t, a.y + dy * t);
+            let mut from = 0.0;
+            for (t0, t1) in covered {
+                if (t0 - from) * length > TOLERANCE {
+                    visible.push((index, at(from), at(t0)));
+                }
+                from = f64::max(from, t1);
+            }
+            if (1.0 - from) * length > TOLERANCE {
+                visible.push((index, at(from), b));
+            }
+        }
+    }
+    visible
+}
+
 /// Splits a simple polygon (convex or not) into triangles, as indices into
 /// it. Ear clipping.
 // ponytail: O(n³) ear clipping; fine for slab outlines of a few dozen
@@ -624,6 +681,30 @@ fn resolve(states: &mut [WallState], i: usize, j: usize, mode: Option<JunctionMo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_edge_is_hidden_between_equal_materials_only() {
+        let square = |x: f64| {
+            vec![
+                Point::new(x, 0.0),
+                Point::new(x + 1000.0, 0.0),
+                Point::new(x + 1000.0, 1000.0),
+                Point::new(x, 1000.0),
+            ]
+        };
+        // The right square is taller: only the shared stretch disappears.
+        let (left, mut right) = (square(0.0), square(1000.0));
+        right[2].y = 2000.0;
+        right[3].y = 2000.0;
+        let (brick, wood) = (Id(1), Id(2));
+        let same = visible_edges(&[(brick, &left), (brick, &right)]);
+        assert_eq!(same.len(), 7, "{same:?}");
+        assert!(
+            same.iter()
+                .all(|(_, a, b)| !(a.x == 1000.0 && b.x == 1000.0 && a.y.max(b.y) <= 1000.0))
+        );
+        assert_eq!(visible_edges(&[(brick, &left), (wood, &right)]).len(), 8);
+    }
 
     #[test]
     fn an_l_shaped_outline_splits_into_triangles_covering_it() {
