@@ -15,8 +15,10 @@ use egui::{Key, Modifiers, Sense, Ui};
 pub use i18n::t;
 use model_view::ModelView;
 use plan::PlanView;
+use properties::fields;
 pub use properties::{Element, Properties};
-pub use wall_tool::WallTool;
+use wall_tool::rectangle;
+pub use wall_tool::{Reference, WallMethod, WallTool};
 
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
@@ -55,6 +57,15 @@ pub enum Tool {
     Opening,
 }
 
+/// How the clicks of the slab tool make an outline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlabMethod {
+    /// Click every corner, close on the first one or with Enter.
+    Polygon,
+    /// Two opposite corners.
+    Rectangle,
+}
+
 /// What the middle of the window shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -79,7 +90,10 @@ pub struct Workspace {
     templates: Templates,
     wall: WallTool,
     slab_points: Vec<Point>,
+    slab_method: SlabMethod,
     beam_start: Option<Point>,
+    /// Each beam starts where the last one ended.
+    beam_chain: bool,
     door: bool,
     selection: Option<Id>,
     properties: Properties,
@@ -98,7 +112,9 @@ impl Workspace {
             wall: WallTool::new(templates.wall.clone()),
             templates,
             slab_points: Vec::new(),
+            slab_method: SlabMethod::Polygon,
             beam_start: None,
+            beam_chain: false,
             door: false,
             selection: None,
             properties: Properties::default(),
@@ -111,7 +127,11 @@ impl Workspace {
         let mut changed = false;
         egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
         egui::Panel::right("properties").show(ui, |ui| {
-            if let Some(command) = self.properties.show(ui, history.project(), self.selection) {
+            if self.selection.is_none() && self.tool != Tool::Select {
+                self.settings(ui);
+            } else if let Some(command) =
+                self.properties.show(ui, history.project(), self.selection)
+            {
                 changed |= self.run(history, command);
             }
         });
@@ -177,6 +197,68 @@ impl Workspace {
         }
     }
 
+    /// The settings of the active tool: how it draws, and the parameters
+    /// of what it draws next.
+    fn settings(&mut self, ui: &mut Ui) {
+        ui.heading(t("settings.title"));
+        ui.label(t("settings.method"));
+        match self.tool {
+            Tool::Wall => {
+                let w = &mut self.wall;
+                for (method, key) in [
+                    (WallMethod::Single, "method.single"),
+                    (WallMethod::Chain, "method.chain"),
+                    (WallMethod::Rectangle, "method.rectangle"),
+                ] {
+                    ui.selectable_value(&mut w.method, method, t(key));
+                }
+                ui.label(t("settings.reference"));
+                for (reference, key) in [
+                    (Reference::Left, "ref.left"),
+                    (Reference::Axis, "ref.axis"),
+                    (Reference::Right, "ref.right"),
+                ] {
+                    ui.selectable_value(&mut w.reference, reference, t(key));
+                }
+            }
+            Tool::Slab => {
+                for (method, key) in [
+                    (SlabMethod::Polygon, "method.polygon"),
+                    (SlabMethod::Rectangle, "method.rectangle"),
+                ] {
+                    ui.selectable_value(&mut self.slab_method, method, t(key));
+                }
+            }
+            Tool::Beam => {
+                ui.selectable_value(&mut self.beam_chain, false, t("method.single"));
+                ui.selectable_value(&mut self.beam_chain, true, t("method.chain"));
+            }
+            Tool::Column | Tool::Opening | Tool::Select => {
+                ui.label(t("method.point"));
+            }
+        }
+        ui.separator();
+        let mut element = match self.tool {
+            Tool::Wall => Element::Wall(self.wall.template.clone()),
+            Tool::Slab => Element::Slab(self.templates.slab.clone()),
+            Tool::Column => Element::Column(self.templates.column.clone()),
+            Tool::Beam => Element::Beam(self.templates.beam.clone()),
+            Tool::Opening if self.door => Element::Opening(self.templates.door.clone()),
+            Tool::Opening | Tool::Select => Element::Opening(self.templates.window.clone()),
+        };
+        fields(ui, &mut element);
+        // Settings are not part of the model: they change at once, with no
+        // command and no undo.
+        match element {
+            Element::Wall(w) => self.wall.template = w,
+            Element::Slab(s) => self.templates.slab = s,
+            Element::Column(c) => self.templates.column = c,
+            Element::Beam(b) => self.templates.beam = b,
+            Element::Opening(o) if self.door => self.templates.door = o,
+            Element::Opening(o) => self.templates.window = o,
+        }
+    }
+
     fn stop(&mut self) {
         self.wall.stop();
         self.slab_points.clear();
@@ -230,11 +312,19 @@ impl Workspace {
 
         self.view
             .paint(&painter, history.project(), plan, self.selection);
+        let rectangle_from = match self.tool {
+            Tool::Wall if self.wall.method == WallMethod::Rectangle => self.wall.start(),
+            Tool::Slab if self.slab_method == SlabMethod::Rectangle => {
+                self.slab_points.first().copied()
+            }
+            _ => None,
+        };
         self.view.preview(
             &painter,
             &self.wall,
             &self.slab_points,
             self.beam_start,
+            rectangle_from,
             cursor,
         );
         if from.is_some() {
@@ -256,7 +346,12 @@ impl Workspace {
                         .slab_points
                         .first()
                         .is_some_and(|q| distance(*q, p) <= snap);
-                if closes {
+                if self.slab_method == SlabMethod::Rectangle
+                    && let Some(&a) = self.slab_points.first()
+                {
+                    self.slab_points = rectangle(a, p).unwrap_or_default();
+                    self.close_slab(history)
+                } else if closes {
                     self.close_slab(history)
                 } else {
                     self.slab_points.push(p);
@@ -283,7 +378,11 @@ impl Workspace {
                         end: p,
                         ..self.templates.beam.clone()
                     };
-                    self.run(history, Command::AddBeam(beam))
+                    let added = self.run(history, Command::AddBeam(beam));
+                    if self.beam_chain {
+                        self.beam_start = Some(p);
+                    }
+                    added
                 }
             },
             Tool::Opening => {

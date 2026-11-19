@@ -1,0 +1,24 @@
+id: walls-drawing-methods
+title: Walls are drawn one by one, in a chain or as a rectangle, on a chosen line
+status: proposed
+given: |
+  The wall tool is active, with a concrete wall 200 thick in its settings.
+  Nothing is selected, so the properties palette shows the tool settings.
+when: |
+  The architect picks a drawing method (single wall, chain, rectangle) and a
+  reference line (left face, axis, right face), sets the thickness and the
+  heights in the palette, then clicks in the plan.
+expect:
+  - Single wall, two clicks give one wall and the tool stops.
+  - Chain, each click ends a wall and starts the next; clicking the first
+    point again closes the outline, corners joined.
+  - Rectangle, two opposite corners give four walls joined at their
+    corners, drawn clockwise so that the first layer is outside.
+  - On the axis, the clicks fall in the middle of the wall; on the right
+    face, the last layer lies on the clicks. Corners still meet.
+  - One undo removes the whole rectangle; in a chain, one undo removes the
+    last wall and gives the previous one its end back.
+  - A thickness or a height set in the palette applies to the next walls
+    drawn, not to the walls already drawn. Changing it is not an undo step.
+  - The slab tool draws a polygon or a rectangle; the beam tool draws one
+    beam or a chain of beams.

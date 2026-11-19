@@ -221,6 +221,7 @@ impl PlanView {
         wall: &WallTool,
         slab: &[Point],
         beam: Option<Point>,
+        rectangle: Option<Point>,
         cursor: Option<Point>,
     ) {
         let line = Stroke::new(1.5, SELECTED);
@@ -228,6 +229,12 @@ impl PlanView {
             return;
         };
         painter.circle_stroke(self.screen(p), 3.0, line);
+        if let Some(a) = rectangle {
+            let corners = [a, Point::new(a.x, p.y), p, Point::new(p.x, a.y)];
+            let points = corners.iter().map(|q| self.screen(*q)).collect();
+            painter.add(Shape::closed_line(points, line));
+            return;
+        }
         if let Some(start) = wall.start() {
             let end = wall.typed_end(start, p).unwrap_or(p);
             painter.line_segment([self.screen(start), self.screen(end)], line);

@@ -107,6 +107,9 @@ pub enum Command {
     RemoveBeam(Id),
     /// Replaces a beam with a new state of itself, same identifier.
     ReplaceBeam(Beam),
+    /// Several commands applied in order, undone in one step. If one is
+    /// refused, the ones before it are undone and nothing changes.
+    Group(Vec<Command>),
 }
 
 /// The result of applying a command.
@@ -294,6 +297,26 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
         ReplaceBeam(new) => {
             let id = new.id;
             applied(ReplaceBeam(project.replace_beam(new)?), vec![id])
+        }
+        Group(commands) => {
+            let mut inverses = Vec::new();
+            let mut changed = Vec::new();
+            for command in commands {
+                match apply(project, command) {
+                    Ok(done) => {
+                        inverses.push(done.inverse);
+                        changed.extend(done.changed);
+                    }
+                    Err(e) => {
+                        for inverse in inverses.into_iter().rev() {
+                            apply(project, inverse)?;
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            inverses.reverse();
+            applied(Group(inverses), changed)
         }
     }
 }

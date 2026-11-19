@@ -67,11 +67,11 @@ impl Element {
 
 /// What the widgets of one frame did.
 #[derive(Default)]
-struct Edit {
+pub(crate) struct Edit {
     /// A widget is being dragged or typed into.
-    active: bool,
+    pub(crate) active: bool,
     /// A widget was let go with a new value.
-    commit: bool,
+    pub(crate) commit: bool,
 }
 
 impl Edit {
@@ -108,20 +108,38 @@ impl Properties {
             ui.label(t("props.none"));
             return None;
         };
-        let mut edit = Edit::default();
-        let mut number = |ui: &mut Ui, key: &'static str, value: &mut f64, min: f64| {
-            ui.horizontal(|ui| {
-                ui.label(t(key));
-                let r = ui.add(
-                    DragValue::new(value)
-                        .speed(5.0)
-                        .range(min..=1.0e6)
-                        .suffix(" mm"),
-                );
-                edit.track(&r);
-            });
-        };
-        match draft {
+        let edit = fields(ui, draft);
+        self.editing = edit.active;
+        ui.separator();
+        if ui.button(t("action.delete")).clicked() {
+            self.editing = false;
+            return Some(draft.remove());
+        }
+        (edit.commit && current.as_ref() != Some(draft)).then(|| {
+            self.editing = false;
+            draft.clone().replace()
+        })
+    }
+}
+
+/// Draws the parameters of `element`, edited in place, and tells what the
+/// widgets did.
+pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
+    let mut edit = Edit::default();
+    let mut number = |ui: &mut Ui, key: &'static str, value: &mut f64, min: f64| {
+        ui.horizontal(|ui| {
+            ui.label(t(key));
+            let r = ui.add(
+                DragValue::new(value)
+                    .speed(5.0)
+                    .range(min..=1.0e6)
+                    .suffix(" mm"),
+            );
+            edit.track(&r);
+        });
+    };
+    {
+        match element {
             Element::Wall(w) => {
                 ui.label(t("el.wall"));
                 for layer in &mut w.layers {
@@ -161,17 +179,8 @@ impl Properties {
                 }
             }
         }
-        self.editing = edit.active;
-        ui.separator();
-        if ui.button(t("action.delete")).clicked() {
-            self.editing = false;
-            return Some(draft.remove());
-        }
-        (edit.commit && current.as_ref() != Some(draft)).then(|| {
-            self.editing = false;
-            draft.clone().replace()
-        })
     }
+    edit
 }
 
 fn role_key(role: LayerRole) -> &'static str {
