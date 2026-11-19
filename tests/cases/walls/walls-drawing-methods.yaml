@@ -22,5 +22,5 @@ expect:
     drawn, not to the walls already drawn. Changing it is not an undo step.
   - The slab tool draws a polygon or a rectangle; the beam tool draws one
     beam or a chain of beams.
-  - A wall with no length is not made: two clicks on the same point give
+  - A wall with no length is not made; two clicks on the same point give
     nothing.
