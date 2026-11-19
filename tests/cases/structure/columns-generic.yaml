@@ -1,0 +1,12 @@
+id: columns-generic
+title: A column is placed by one click and edited in the palette
+status: proposed
+given: |
+  Story 0 at level 0 and story 1 at level 2800. A concrete column of 300 by
+  300, from the structural level of story 0 to that of story 1.
+when: |
+  The architect clicks a point in the plan with the column tool.
+expect:
+  - A column of 300 by 300 is centred on the point, 2800 high.
+  - Its width, depth and offsets can be changed in the properties palette.
+  - Delete removes it; undo brings it back.
