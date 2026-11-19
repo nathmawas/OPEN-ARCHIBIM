@@ -18,6 +18,8 @@ and draw through `wgpu` (ADR 0003).
 - The plan is drawn with egui shapes for now. When the performance budget
   needs it, the plan and 3D views move to our own `wgpu` pipeline inside an
   egui panel, as ADR 0003 describes.
+- The 3D view uses that pipeline from the start, in `archibim-render`: it
+  needs a depth buffer, which egui shapes do not have.
 
 ## Consequences
 

@@ -1,10 +1,12 @@
 //! Shapes derived from the model: wall layers in plan and their junctions,
-//! outlines of openings, columns and beams, triangles for fills.
+//! outlines of openings, columns and beams, triangles for fills, and the
+//! volumes of the 3D view.
 //!
 //! Pure functions: nothing here keeps state or draws.
 
 use archibim_model::{
-    Beam, Column, Framing, Id, JunctionMode, ModelError, Point, Project, RenovationStatus, Wall,
+    Beam, Column, Framing, Id, JunctionMode, LayerRole, LevelKind, LevelRef, ModelError, Point,
+    Project, RenovationStatus, Wall,
 };
 
 /// Which state of the building to draw (renovation filter).
@@ -137,6 +139,105 @@ pub fn beam_outline(beam: &Beam) -> Option<Vec<Point>> {
         sub(beam.end, n),
         sub(beam.start, n),
     ])
+}
+
+/// A straight extrusion for the 3D view: an outline in plan between two
+/// heights.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Prism {
+    /// The element it belongs to.
+    pub element: Id,
+    /// The role of its layer, for walls and slabs; none for columns and
+    /// beams.
+    pub role: Option<LayerRole>,
+    /// The outline in plan, closed.
+    pub outline: Vec<Point>,
+    /// Height of the underside.
+    pub bottom: f64,
+    /// Height of the top.
+    pub top: f64,
+}
+
+/// The volumes of every element of every story: each wall layer from the
+/// bottom to the top of its wall, with the wall kept under the sill and over
+/// the head of its openings; each slab layer under the slab's top level;
+/// columns from foot to head; beams under their top level.
+// ponytail: openings cut straight through, no reveal returns, no frame or
+// glass yet; walls do not stop under slabs.
+pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, ModelError> {
+    let mut prisms = Vec::new();
+    let mut push = |element, role, outline, bottom: f64, top: f64| {
+        if top > bottom {
+            prisms.push(Prism {
+                element,
+                role,
+                outline,
+                bottom,
+                top,
+            });
+        }
+    };
+    for story in &project.stories {
+        for layer in plan_layers(project, story.id, phase)? {
+            let wall = project.wall(layer.wall)?;
+            let (bottom, top) = (project.level(&wall.bottom)?, project.level(&wall.top)?);
+            let role = wall.layers.get(layer.layer).map(|l| l.role);
+            for outline in layer.polygons {
+                push(wall.id, role, outline, bottom, top);
+            }
+        }
+    }
+    for opening in &project.openings {
+        let wall = project.wall(opening.wall)?;
+        let (bottom, top) = (project.level(&wall.bottom)?, project.level(&wall.top)?);
+        let floor = project.level(&LevelRef {
+            story: wall.story,
+            kind: LevelKind::Finished,
+            offset: 0.0,
+        })?;
+        let (sill, head) = (floor + opening.sill, floor + opening.sill + opening.height);
+        let outline = opening_outline(project, opening.id)?;
+        let (a, b) = (outline[0], outline[1]);
+        let r = unit(sub(outline[3], a)).unwrap_or(Point::new(0.0, 0.0));
+        let mut from = 0.0;
+        for layer in wall.layers.iter().filter(|l| phase.shows(l.status)) {
+            let to = from + layer.thickness;
+            let strip = vec![
+                add(a, mul(r, from)),
+                add(b, mul(r, from)),
+                add(b, mul(r, to)),
+                add(a, mul(r, to)),
+            ];
+            push(
+                wall.id,
+                Some(layer.role),
+                strip.clone(),
+                bottom,
+                sill.min(top),
+            );
+            push(wall.id, Some(layer.role), strip, head.max(bottom), top);
+            from = to;
+        }
+    }
+    for slab in &project.slabs {
+        let mut top = project.level(&slab.top)?;
+        for layer in slab.layers.iter().filter(|l| phase.shows(l.status)) {
+            let bottom = top - layer.thickness;
+            push(slab.id, Some(layer.role), slab.outline.clone(), bottom, top);
+            top = bottom;
+        }
+    }
+    for column in &project.columns {
+        let (bottom, top) = (project.level(&column.bottom)?, project.level(&column.top)?);
+        push(column.id, None, column_outline(column), bottom, top);
+    }
+    for beam in &project.beams {
+        if let Some(outline) = beam_outline(beam) {
+            let top = project.level(&beam.top)?;
+            push(beam.id, None, outline, top - beam.height, top);
+        }
+    }
+    Ok(prisms)
 }
 
 /// Is `p` inside the closed polygon?

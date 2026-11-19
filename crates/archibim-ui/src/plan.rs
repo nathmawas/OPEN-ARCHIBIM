@@ -9,9 +9,9 @@ use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui,
 use crate::WallTool;
 
 const INK: Color32 = Color32::from_gray(40);
-const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
+pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
-const CONCRETE: Color32 = Color32::from_gray(150);
+pub(crate) const CONCRETE: Color32 = Color32::from_gray(150);
 /// Fill colour of framing members (studs, joists).
 const MEMBER: Color32 = Color32::from_rgb(160, 110, 60);
 
@@ -258,7 +258,7 @@ impl PlanView {
 /// Fill colour of a layer by its constructive role.
 // ponytail: fixed colours per role; replaced by the material's own
 // appearance once materials carry parameters.
-fn fill_of(role: LayerRole) -> Color32 {
+pub(crate) fn fill_of(role: LayerRole) -> Color32 {
     match role {
         LayerRole::LoadBearing => Color32::from_rgb(190, 120, 100),
         LayerRole::Insulation => Color32::from_rgb(250, 225, 120),

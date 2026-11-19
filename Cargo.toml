@@ -20,4 +20,5 @@ expect_used = "deny"
 archibim-model = { path = "crates/archibim-model" }
 archibim-geometry = { path = "crates/archibim-geometry" }
 archibim-commands = { path = "crates/archibim-commands" }
+archibim-render = { path = "crates/archibim-render" }
 archibim-ui = { path = "crates/archibim-ui" }

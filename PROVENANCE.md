@@ -27,7 +27,8 @@ Chosen by the Stage 0 prototype (ADR 0007).
 |---|---|---|---|---|---|
 | egui | 0.37 | MIT OR Apache-2.0 | crates.io, emilk/egui | widgets and the plan view (`archibim-ui`) | yes |
 | eframe | 0.37 | MIT OR Apache-2.0 | crates.io, emilk/egui | the application window (`archibim-app`) | yes |
-| wgpu | through eframe | MIT OR Apache-2.0 | crates.io, gfx-rs/wgpu | GPU drawing | yes |
+| egui-wgpu | 0.37 | MIT OR Apache-2.0 | crates.io, emilk/egui | draws the 3D view inside an egui panel (`archibim-render`) | yes |
+| wgpu | through egui-wgpu | MIT OR Apache-2.0 | crates.io, gfx-rs/wgpu | GPU drawing | yes |
 
 These bring about 170 crates, all under permissive licenses (MIT, Apache-2.0,
 BSD, ISC, Zlib, Unicode-3.0). The default fonts of egui are under the SIL
