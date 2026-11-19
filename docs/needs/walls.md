@@ -18,6 +18,12 @@ and the renovation drawings.
 - External insulation on an existing wall means deleting and redrawing the
   wall.
 - Height settings that do not follow the stories when the project changes.
+- Three or more walls meeting at one point: layers overlap, or walls run
+  past the point, and the junction has to be redrawn by hand.
+- Junction settings that are hidden: nothing shows why two walls joined, did
+  not join, or were silently extended.
+- The same window drawn differently in two walls because the insulation
+  return is set on the window instead of on the wall.
 
 ## Parts and details
 
@@ -29,17 +35,31 @@ and the renovation drawings.
   frame", then edited in place.
 - **Framing** within a layer: studs of a timber frame wall in its
   insulation, with width and spacing, drawn in plan.
-- **Junctions** driven by material priority; equal priorities meet on a
-  mitre unless the user picks the wall in front, per junction.
+- **Priority** of each layer, started from its role (load-bearing first,
+  then insulation, then air gaps, membranes and finishes low) and
+  adjustable per material. An unusual order is flagged with a warning,
+  never refused: the architect decides.
+- **Junctions** driven by layer priority; equal priorities meet on a mitre
+  unless the user picks the wall in front, per junction. A junction is
+  visible and selectable, with its state: joined, in conflict, or not
+  joined. The user can forbid joining at one end of a wall (an expansion
+  joint). A wall is never extended or shortened without showing it.
+- **Nodes** of three or more walls are resolved like any junction, around
+  the point, with no limit on the number of walls.
 - **Top and bottom** linked to a story or set to a fixed level, with an
-  offset.
+  offset. Layers share the wall's top and bottom by default; where a detail
+  needs it, a layer can have its own (external insulation and render
+  running down past the slab edge at the foot of a ground floor wall).
 - **Details**, per face where it applies:
   - skirting;
   - cornice or moulding;
   - band course;
   - plinth course (a different finish at the foot of the wall);
   - coping on a low wall or parapet;
-  - insulation return into the reveals of openings.
+  - insulation return into the reveals of openings: the wall says which
+    layers return, edge by edge (jambs, head, sill); the opening only says
+    where its frame sits. The same window adapts to each wall it is placed
+    in.
 
 ## Presets
 
@@ -59,11 +79,16 @@ and the renovation drawings.
 
 A wall with its build-up as a standard IFC layered wall, contained in its
 story, with explicit geometry. Details are exported as parts of the wall.
+Each junction is exported as a path connection between the two walls, with
+the end or point of each wall, the layer priorities and the cut line, so
+another tool can rebuild the junction instead of guessing it.
 
 ## What we drop
 
 - Separate objects for skirtings, cornices or copings.
 - Manual junction cleanup tools.
+- Junction results that depend on display settings (hatches, pens) or on
+  the order of clicks.
 
 ## Open questions
 

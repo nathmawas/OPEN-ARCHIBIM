@@ -1,0 +1,12 @@
+id: walls-junction-state
+title: Walls that do not meet are never extended silently
+status: proposed
+given: |
+  Two walls whose ends are 50 apart, close to an L corner but not touching.
+expect:
+  - The walls are not joined, and the plan shows them as not joined.
+  - Neither wall is extended or shortened on its own.
+  - The user can ask to join them, which extends both walls to their
+    meeting point and shows the change.
+  - A junction that cannot be resolved is shown as in conflict, with the
+    reason.

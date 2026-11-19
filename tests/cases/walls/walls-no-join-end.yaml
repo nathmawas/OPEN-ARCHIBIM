@@ -1,0 +1,12 @@
+id: walls-no-join-end
+title: The user can forbid joining at one end of a wall
+status: proposed
+given: |
+  Two walls with the same build-up meet at an L corner.
+when: |
+  The user forbids joining at the end of the first wall.
+expect:
+  - The two walls no longer join; each ends square at its own end point.
+  - The other end of the first wall keeps its junctions.
+  - The setting is visible on the wall end and can be removed.
+  - Undo restores the corner.

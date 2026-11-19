@@ -1,0 +1,16 @@
+id: ifc-wall-junction-export
+title: Wall junctions are exported so another tool can rebuild them
+status: proposed
+given: |
+  The L corner of walls-l-corner-same-build-up and the T junction of
+  walls-t-junction-priority.
+when: |
+  The project is exported to IFC4 Reference View.
+expect:
+  - Each junction is an IfcRelConnectsPathElements between the two walls.
+  - The L corner relates the end of one wall to the start of the other; the
+    T junction relates the end of the abutting wall to the path of the
+    other.
+  - The layer priorities of both walls are written on the relation.
+  - The cut line of the junction is written as its connection geometry.
+  - The file passes the buildingSMART validation service.

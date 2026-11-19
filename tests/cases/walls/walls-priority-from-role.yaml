@@ -1,0 +1,15 @@
+id: walls-priority-from-role
+title: A layer's junction priority starts from its role
+status: proposed
+given: |
+  A new wall build-up with render 20 (finish), insulation 140
+  (insulation), air gap 20 (air gap), concrete 200 (load-bearing) and
+  plaster 15 (finish), using materials that have no priority set yet.
+expect:
+  - The load-bearing layer gets the highest priority.
+  - The insulation comes next.
+  - Air gaps, membranes and finishes get a low priority.
+  - The architect can change the priority of a material, and every wall
+    using it follows.
+  - The scale of priorities is open, so a new material can be placed between
+    two existing ones.
