@@ -143,11 +143,10 @@ impl Project {
         Ok(())
     }
 
-    /// Adds a wall. Its story and materials must exist.
+    /// Adds a wall. Its story and materials must exist, and it needs a length.
     pub fn insert_wall(&mut self, wall: Wall) -> Result<(), ModelError> {
         self.check_free(wall.id)?;
-        self.story(wall.story)?;
-        self.check_layers(&wall.layers)?;
+        self.check_wall(&wall)?;
         self.walls.push(wall);
         Ok(())
     }
@@ -210,8 +209,7 @@ impl Project {
     /// Replaces a wall with a new state of itself, keeping its identifier,
     /// openings and junctions. Returns the previous state.
     pub fn replace_wall(&mut self, wall: Wall) -> Result<Wall, ModelError> {
-        self.story(wall.story)?;
-        self.check_layers(&wall.layers)?;
+        self.check_wall(&wall)?;
         Ok(std::mem::replace(self.wall_mut(wall.id)?, wall))
     }
 
@@ -231,6 +229,17 @@ impl Project {
     pub fn replace_beam(&mut self, beam: Beam) -> Result<Beam, ModelError> {
         self.check_beam(&beam)?;
         Ok(std::mem::replace(self.beam_mut(beam.id)?, beam))
+    }
+
+    fn check_wall(&self, wall: &Wall) -> Result<(), ModelError> {
+        self.story(wall.story)?;
+        self.check_layers(&wall.layers)?;
+        let length =
+            ((wall.end.x - wall.start.x).powi(2) + (wall.end.y - wall.start.y).powi(2)).sqrt();
+        if length < 1.0 {
+            return Err(ModelError::Invalid("a wall needs a length"));
+        }
+        Ok(())
     }
 
     fn check_slab(&self, slab: &Slab) -> Result<(), ModelError> {

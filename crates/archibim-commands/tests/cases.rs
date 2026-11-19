@@ -961,5 +961,15 @@ fn walls_drawing_methods() -> Result {
     let refused = Command::Group(vec![Command::AddWall(extra), Command::AddWall(flat)]);
     assert!(f.h.run(refused).is_err(), "a material that does not exist");
     assert_eq!(f.h.project().walls.len(), 4, "nothing of the group is kept");
+
+    let point = Wall {
+        id: f.h.new_id(),
+        end: walls[0].start,
+        ..walls[0].clone()
+    };
+    assert!(
+        f.h.run(Command::AddWall(point)).is_err(),
+        "a wall needs a length"
+    );
     Ok(())
 }
