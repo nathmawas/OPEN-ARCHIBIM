@@ -51,3 +51,5 @@ ref.bearing_right = Nu droit du porteur
 p.angle = Rotation
 p.anchor = Point d'accroche
 p.level_offset = Décalage du niveau
+p.ref_offset = Décalage de la ligne
+action.flip = Retourner

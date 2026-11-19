@@ -214,6 +214,7 @@ mod tests {
             start: Point::new(0.0, 0.0),
             end: Point::new(1.0, 0.0),
             reference: WallReference::LeftFace,
+            offset: 0.0,
             layers: vec![Layer {
                 role: LayerRole::LoadBearing,
                 material,
@@ -314,6 +315,45 @@ mod tests {
         assert!(tool.start().is_none(), "closing stops the chain");
         h.undo()?;
         assert_eq!(h.project().walls.len(), 3, "undo removes the last wall");
+        Ok(())
+    }
+
+    #[test]
+    fn a_flipped_wall_mirrors_about_its_line_and_keeps_its_openings() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Single;
+        tool.template.offset = 50.0;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(5000.0, 0.0));
+        let wall = h.project().walls[0].clone();
+        let (face, _) = wall.left_face().ok_or("no length")?;
+        assert!(close(face, Point::new(0.0, -50.0)), "offset to the right");
+        let opening = archibim_model::Opening {
+            id: h.new_id(),
+            wall: wall.id,
+            kind: archibim_model::OpeningKind::Interior,
+            position: 1000.0,
+            sill: 0.0,
+            height: 2000.0,
+            frame: 50.0,
+            parts: vec![archibim_model::Part {
+                width: 800.0,
+                operation: archibim_model::Operation::Fixed,
+            }],
+            nominal: archibim_model::NominalSize::ClearOpening,
+        };
+        h.run(Command::AddOpening(opening.clone()))?;
+        h.run(crate::properties::flip(h.project(), &wall))?;
+        let flipped = h.project().wall(wall.id)?;
+        let (face, end) = flipped.left_face().ok_or("no length")?;
+        // Seen from the other end, the left face is now at y = -50 on the
+        // line's other side: the wall lies between -50 and 150.
+        assert!(close(face, Point::new(5000.0, -50.0)), "{face:?}");
+        assert!(close(end, Point::new(0.0, -50.0)));
+        let moved = h.project().opening(opening.id)?;
+        assert!((moved.position - 3100.0).abs() < 1e-6, "{}", moved.position);
+        h.undo()?;
+        assert_eq!(h.project().wall(wall.id)?.start, wall.start, "one undo");
         Ok(())
     }
 }

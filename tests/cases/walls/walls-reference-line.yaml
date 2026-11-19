@@ -21,3 +21,7 @@ expect:
     with no gap and no overlap.
   - The reference line is a parameter of the wall, changed in its palette
     like any other, and undone like any other change.
+  - An offset moves the reference line away from the points drawn, to the
+    right for a positive value, the wall keeping its build-up.
+  - Flipping a wall mirrors it about its reference line in one undo step;
+    its openings keep their place along the wall.

@@ -113,6 +113,12 @@ impl Properties {
         let edit = fields(ui, draft);
         self.editing = edit.active;
         ui.separator();
+        if let Element::Wall(w) = draft
+            && ui.button(t("action.flip")).clicked()
+        {
+            self.editing = false;
+            return Some(flip(project, w));
+        }
         if ui.button(t("action.delete")).clicked() {
             self.editing = false;
             return Some(draft.remove());
@@ -122,6 +128,31 @@ impl Properties {
             draft.clone().replace()
         })
     }
+}
+
+/// The wall mirrored about its reference line, with its openings: one
+/// undo step.
+// ponytail: door hands and parts are kept as they are; check them against
+// a real door once openings are detailed.
+pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
+    let length = ((wall.end.x - wall.start.x).powi(2) + (wall.end.y - wall.start.y).powi(2)).sqrt();
+    let mut commands = vec![Command::ReplaceWall(Wall {
+        start: wall.end,
+        end: wall.start,
+        // The line stays where it is, now seen from the other end.
+        offset: -wall.offset,
+        ..wall.clone()
+    })];
+    for o in project.openings.iter().filter(|o| o.wall == wall.id) {
+        let mut parts = o.parts.clone();
+        parts.reverse();
+        commands.push(Command::ReplaceOpening(Opening {
+            position: length - o.position - o.wall_opening_width(),
+            parts,
+            ..o.clone()
+        }));
+    }
+    Command::Group(commands)
 }
 
 /// Draws the parameters of `element`, edited in place, and tells what the
@@ -138,6 +169,7 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
             number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
             ui.label(t("settings.reference"));
+            number(ui, e, "p.ref_offset", &mut w.offset, -1.0e6);
             for (reference, key) in [
                 (WallReference::LeftFace, "ref.left"),
                 (WallReference::Axis, "ref.axis"),

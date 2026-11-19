@@ -82,6 +82,7 @@ impl Fixture {
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
             reference: WallReference::LeftFace,
+            offset: 0.0,
             layers,
             bottom: LevelRef {
                 story: self.story0,

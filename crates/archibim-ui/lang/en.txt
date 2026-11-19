@@ -51,3 +51,5 @@ ref.bearing_right = Load-bearing right face
 p.angle = Angle
 p.anchor = Placed point
 p.level_offset = Level offset
+p.ref_offset = Reference line offset
+action.flip = Flip

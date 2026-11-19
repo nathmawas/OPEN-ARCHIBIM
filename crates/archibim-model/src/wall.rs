@@ -107,6 +107,9 @@ pub struct Wall {
     pub end: Point,
     /// Which line of the wall `start` and `end` lie on.
     pub reference: WallReference,
+    /// How far that line lies to the right of `start` and `end`; zero
+    /// puts it on them.
+    pub offset: f64,
     /// The build-up, from the left face to the right face.
     pub layers: Vec<Layer>,
     /// Bottom of the wall.
@@ -121,10 +124,15 @@ impl Wall {
         self.layers.iter().map(|l| l.thickness).sum()
     }
 
-    /// How far the left face lies to the left of the reference line.
+    /// How far the left face lies to the left of `start` and `end`.
     /// Without load-bearing layers, a load-bearing reference falls back on
     /// the face on its side.
     pub fn left_face_shift(&self) -> f64 {
+        self.reference_shift() - self.offset
+    }
+
+    /// How far the left face lies to the left of the reference line.
+    fn reference_shift(&self) -> f64 {
         let bearing = |l: &&Layer| l.role == LayerRole::LoadBearing;
         let before = |i: usize| self.layers[..i].iter().map(|l| l.thickness).sum::<f64>();
         match self.reference {

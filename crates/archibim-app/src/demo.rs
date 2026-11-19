@@ -108,6 +108,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
             reference: WallReference::LeftFace,
+            offset: 0.0,
             layers: layers.clone(),
             bottom: level(ground, 0.0),
             top: level(first, 0.0),
