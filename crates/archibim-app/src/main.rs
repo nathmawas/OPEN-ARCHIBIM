@@ -1,8 +1,8 @@
 //! OPEN-ARCHIBIM: assembles the crates into the application.
 //!
 //! Stage 0 prototype: opens a demonstration house on its ground floor plan,
-//! with the base tools (select, wall, slab, column, beam, opening) and the
-//! properties palette.
+//! with the base tools (select, wall, slab, column, beam, opening), the
+//! properties palette and the 3D view.
 
 mod demo;
 
@@ -41,8 +41,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     eframe::run_native(
         "OPEN-ARCHIBIM",
-        eframe::NativeOptions::default(),
-        Box::new(|_| Ok(Box::new(app))),
+        eframe::NativeOptions {
+            depth_buffer: archibim_render::DEPTH_BITS,
+            ..Default::default()
+        },
+        Box::new(|cc| {
+            if let Some(state) = &cc.wgpu_render_state {
+                archibim_render::install(state);
+            }
+            Ok(Box::new(app))
+        }),
     )?;
     Ok(())
 }

@@ -5,7 +5,7 @@
 //! an architect agrees them.
 
 use archibim_commands::{Command, History};
-use archibim_geometry::{LayerPlan, Phase, plan_layers, polygon_area};
+use archibim_geometry::{LayerPlan, Phase, model_prisms, plan_layers, polygon_area};
 use archibim_model::{
     Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind, LevelRef, Material,
     NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
@@ -808,5 +808,121 @@ fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
     f.h.run(Command::RemoveColumn(column.id))?;
     f.h.undo()?;
     assert_eq!(f.h.project().column(column.id)?, &column, "delete undone");
+    Ok(())
+}
+
+#[test]
+fn views_3d_model() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    let wall = f.wall((0.0, 0.0), (5000.0, 0.0), &[(concrete, 200.0)])?;
+    let level = |story| LevelRef {
+        story,
+        kind: LevelKind::Structural,
+        offset: 0.0,
+    };
+    let window = Opening {
+        id: f.h.new_id(),
+        wall,
+        kind: OpeningKind::Exterior(Performance::default()),
+        position: 1900.0,
+        sill: 900.0,
+        height: 1350.0,
+        frame: 60.0,
+        parts: vec![Part {
+            width: 1080.0,
+            operation: Operation::SideHung(Hand::Left),
+        }],
+        nominal: NominalSize::ClearOpening,
+    };
+    f.h.run(Command::AddOpening(window))?;
+    let square = |x: f64, y: f64, half: f64| {
+        vec![
+            Point::new(x - half, y - half),
+            Point::new(x + half, y - half),
+            Point::new(x + half, y + half),
+            Point::new(x - half, y + half),
+        ]
+    };
+    let slab = f.h.new_id();
+    f.h.run(Command::AddSlab(Slab {
+        id: slab,
+        story: f.story0,
+        outline: square(2500.0, 2000.0, 2500.0),
+        layers: vec![layer_of(LayerRole::LoadBearing, concrete, 200.0)],
+        top: level(f.story0),
+    }))?;
+    let column = f.h.new_id();
+    f.h.run(Command::AddColumn(Column {
+        id: column,
+        story: f.story0,
+        at: Point::new(2500.0, 2000.0),
+        width: 300.0,
+        depth: 300.0,
+        material: concrete,
+        bottom: level(f.story0),
+        top: level(f.story1),
+    }))?;
+    let beam = f.h.new_id();
+    f.h.run(Command::AddBeam(Beam {
+        id: beam,
+        story: f.story0,
+        start: Point::new(0.0, 2000.0),
+        end: Point::new(5000.0, 2000.0),
+        width: 200.0,
+        height: 400.0,
+        material: concrete,
+        top: level(f.story1),
+    }))?;
+
+    let volume =
+        |p: &Project, element: Id| -> std::result::Result<f64, Box<dyn std::error::Error>> {
+            Ok(model_prisms(p, Phase::Proposed)?
+                .iter()
+                .filter(|q| q.element == element)
+                .map(|q| polygon_area(&q.outline) * (q.top - q.bottom))
+                .sum())
+        };
+    let heights =
+        |p: &Project, element: Id| -> std::result::Result<(f64, f64), Box<dyn std::error::Error>> {
+            let prisms = model_prisms(p, Phase::Proposed)?;
+            let of = prisms.iter().filter(|p| p.element == element);
+            Ok((
+                of.clone().map(|p| p.bottom).fold(f64::MAX, f64::min),
+                of.map(|p| p.top).fold(f64::MIN, f64::max),
+            ))
+        };
+    assert_eq!(
+        heights(f.h.project(), wall)?,
+        (0.0, 2800.0),
+        "wall from floor to floor"
+    );
+    assert!(
+        close(
+            volume(f.h.project(), wall)?,
+            (5000.0 * 2800.0 - 1200.0 * 1350.0) * 200.0
+        ),
+        "the window leaves its hole, the wall stays under and over it"
+    );
+    assert_eq!(
+        heights(f.h.project(), slab)?,
+        (-200.0, 0.0),
+        "slab under its top"
+    );
+    assert_eq!(heights(f.h.project(), column)?, (0.0, 2800.0));
+    assert_eq!(
+        heights(f.h.project(), beam)?,
+        (2400.0, 2800.0),
+        "beam under its top"
+    );
+
+    f.h.undo()?; // the beam
+    f.h.undo()?; // the column
+    f.h.undo()?; // the slab
+    f.h.undo()?; // the window
+    assert!(
+        close(volume(f.h.project(), wall)?, 5000.0 * 2800.0 * 200.0),
+        "undo fills it"
+    );
     Ok(())
 }

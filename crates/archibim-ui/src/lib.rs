@@ -2,6 +2,7 @@
 //! commands; never changes the model directly.
 
 mod i18n;
+mod model_view;
 mod plan;
 mod properties;
 mod wall_tool;
@@ -12,6 +13,7 @@ use archibim_model::{Beam, Column, Id, Opening, Point, Project, Slab, Wall};
 use egui::{Key, Modifiers, Sense, Ui};
 
 pub use i18n::t;
+use model_view::ModelView;
 use plan::PlanView;
 pub use properties::{Element, Properties};
 pub use wall_tool::WallTool;
@@ -53,11 +55,26 @@ pub enum Tool {
     Opening,
 }
 
-/// The working window: tools on the left, the plan in the middle, the
-/// properties on the right.
+/// What the middle of the window shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// The plan alone.
+    Plan,
+    /// The 3D view alone.
+    Model,
+    /// The plan and the 3D view side by side.
+    Both,
+}
+
+/// The working window: tools on the left, the plan and the 3D view in the
+/// middle, the properties on the right.
 #[derive(Debug)]
 pub struct Workspace {
     view: PlanView,
+    model: ModelView,
+    layout: Layout,
+    /// The 3D view must be rebuilt.
+    dirty: bool,
     tool: Tool,
     templates: Templates,
     wall: WallTool,
@@ -74,6 +91,9 @@ impl Workspace {
     pub fn new(templates: Templates) -> Self {
         Self {
             view: PlanView::default(),
+            model: ModelView::default(),
+            layout: Layout::Both,
+            dirty: true,
             tool: Tool::Select,
             wall: WallTool::new(templates.wall.clone()),
             templates,
@@ -98,9 +118,26 @@ impl Workspace {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.label(self.message.as_deref().unwrap_or(""));
         });
-        egui::CentralPanel::default().show(ui, |ui| {
-            changed |= self.plan(ui, history, plan);
+        if self.dirty || self.model.stale(self.selection) {
+            self.model.rebuild(history.project(), self.selection);
+            self.dirty = false;
+        }
+        egui::CentralPanel::default().show(ui, |ui| match self.layout {
+            Layout::Plan => changed |= self.plan(ui, history, plan),
+            Layout::Model => {
+                let typing = ui.ctx().memory(|m| m.focused().is_some());
+                changed |= !typing && self.keys(ui, history, None);
+                self.model.show(ui);
+            }
+            Layout::Both => ui.columns(2, |columns| {
+                changed |= self.plan(&mut columns[0], history, plan);
+                self.model.show(&mut columns[1]);
+            }),
         });
+        if changed {
+            self.dirty = true;
+            ui.ctx().request_repaint();
+        }
         if self
             .selection
             .is_some_and(|id| Element::find(history.project(), id).is_none())
@@ -129,6 +166,14 @@ impl Workspace {
         }
         if self.tool != before {
             self.stop();
+        }
+        ui.separator();
+        for (layout, key) in [
+            (Layout::Plan, "view.plan"),
+            (Layout::Model, "view.model"),
+            (Layout::Both, "view.both"),
+        ] {
+            ui.selectable_value(&mut self.layout, layout, t(key));
         }
     }
 

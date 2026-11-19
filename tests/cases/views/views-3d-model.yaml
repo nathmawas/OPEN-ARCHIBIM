@@ -1,0 +1,20 @@
+id: views-3d-model
+title: The 3D view shows the model the plan shows
+status: proposed
+given: |
+  A ground floor at 0 and a first floor at 2800. A concrete wall 200 thick,
+  5000 long, from the ground floor to the first floor, with a window 1200
+  wide and 1350 high, its sill at 900. Under it a concrete slab 200 thick
+  with its top at 0, a column 300 by 300 and a beam 400 high under the first
+  floor.
+when: |
+  The architect opens the 3D view next to the plan.
+expect:
+  - The wall rises from 0 to 2800, each layer in its colour.
+  - The window leaves a hole from 900 to 2250; the wall stays under the sill
+    and over the head.
+  - The slab sits under its top level, from -200 to 0.
+  - The column runs from 0 to 2800, the beam from 2400 to 2800.
+  - A change in the plan or in the properties palette shows at once in 3D;
+    undo brings the 3D view back as well.
+  - Dragging turns around the building, the wheel zooms, Home shows it all.

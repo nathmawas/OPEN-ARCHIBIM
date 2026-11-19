@@ -32,3 +32,6 @@ p.frame = Dormant
 p.part = Partie
 action.delete = Supprimer
 status.refused = Refusé :
+view.plan = Plan
+view.model = 3D
+view.both = Plan + 3D
