@@ -772,6 +772,7 @@ fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 300.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -872,6 +873,7 @@ fn views_3d_model() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 300.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -1095,6 +1097,7 @@ fn structure_placed_point() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 200.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -1121,6 +1124,18 @@ fn structure_placed_point() -> Result {
         close(y0, 1000.0) && close(y1, 1300.0),
         "turned around the click"
     );
+    let round = Column {
+        round: true,
+        anchor: Anchor::default(),
+        width: 400.0,
+        ..column.clone()
+    };
+    let (x0, y0, x1, y1) = bounds(&column_outline(&round));
+    assert!(
+        close(x0, 800.0) && close(x1, 1200.0),
+        "diameter 400 round the click"
+    );
+    assert!(close(y0, 800.0) && close(y1, 1200.0));
     let wider = Column {
         width: 500.0,
         ..column.clone()

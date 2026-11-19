@@ -189,8 +189,12 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
         }
         Element::Column(c) => {
             ui.label(t("el.column"));
-            number(ui, e, "p.width", &mut c.width, 1.0);
-            number(ui, e, "p.depth", &mut c.depth, 1.0);
+            e.track(&ui.checkbox(&mut c.round, t("p.round")));
+            let width = if c.round { "p.diameter" } else { "p.width" };
+            number(ui, e, width, &mut c.width, 1.0);
+            if !c.round {
+                number(ui, e, "p.depth", &mut c.depth, 1.0);
+            }
             number(ui, e, "p.bottom_offset", &mut c.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut c.top.offset, -1.0e6);
             angle(ui, e, &mut c.angle);

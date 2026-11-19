@@ -167,13 +167,30 @@ fn curved_layers(wall: &Wall, phase: Phase) -> Vec<LayerPlan> {
 }
 
 /// A column in plan, placed by its anchor and turned by its angle.
+/// A round column is cut into short segments, for drawing only.
 pub fn column_outline(column: &Column) -> Vec<Point> {
+    let depth = if column.round {
+        column.width
+    } else {
+        column.depth
+    };
     let x0 = column.anchor.width.first_edge(column.width);
-    let y0 = column.anchor.depth.first_edge(column.depth);
-    let (x1, y1) = (x0 + column.width, y0 + column.depth);
+    let y0 = column.anchor.depth.first_edge(depth);
+    let (x1, y1) = (x0 + column.width, y0 + depth);
+    let local: Vec<(f64, f64)> = if column.round {
+        let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, column.width / 2.0);
+        (0..48)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / 48.0;
+                (cx + r * a.cos(), cy + r * a.sin())
+            })
+            .collect()
+    } else {
+        vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    };
     let (sin, cos) = column.angle.sin_cos();
     let c = column.at;
-    [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    local
         .iter()
         .map(|&(x, y)| Point::new(c.x + x * cos - y * sin, c.y + x * sin + y * cos))
         .collect()

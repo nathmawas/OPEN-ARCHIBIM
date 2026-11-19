@@ -133,6 +133,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
             angle: 0.0,
             width: 300.0,
             depth: 300.0,
+            round: false,
             material: concrete,
             bottom: level(ground, 0.0),
             top: level(first, 0.0),

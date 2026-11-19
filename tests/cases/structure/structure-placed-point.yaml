@@ -16,3 +16,5 @@ expect:
   - A beam placed by its bottom left corner lies to the right of the line
     drawn, with its bottom face on the level of the beam.
   - Changing the size keeps the placed point where it is.
+  - A round column takes its width as diameter; placed by its centre, it
+    lies all round the click.

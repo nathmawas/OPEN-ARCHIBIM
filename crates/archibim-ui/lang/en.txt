@@ -63,3 +63,5 @@ snap.alignments = Alignments
 method.rotated_rectangle = Rotated rectangle
 method.circle = Circle
 method.arc = Arc
+p.round = Round
+p.diameter = Diameter

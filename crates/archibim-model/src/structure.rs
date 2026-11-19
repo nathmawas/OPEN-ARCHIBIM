@@ -69,10 +69,12 @@ pub struct Column {
     /// Turn around `at`, anticlockwise, in radians. At zero the width runs
     /// along x.
     pub angle: f64,
-    /// Size along the width.
+    /// Size along the width; the diameter of a round column.
     pub width: f64,
-    /// Size along the depth.
+    /// Size along the depth; unused for a round column.
     pub depth: f64,
+    /// Round in section rather than rectangular.
+    pub round: bool,
     /// Material.
     pub material: Id,
     /// Level of the foot.
