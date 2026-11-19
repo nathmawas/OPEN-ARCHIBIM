@@ -5,6 +5,7 @@ mod i18n;
 mod model_view;
 mod plan;
 mod properties;
+mod snap;
 mod wall_tool;
 
 use archibim_commands::{Command, History};
@@ -17,6 +18,7 @@ use model_view::ModelView;
 use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
+pub use snap::{Scene, Snap, SnapKind, SnapOptions};
 use wall_tool::rectangle;
 pub use wall_tool::{WallMethod, WallTool};
 
@@ -98,6 +100,7 @@ pub struct Workspace {
     selection: Option<Id>,
     properties: Properties,
     message: Option<String>,
+    snap_options: SnapOptions,
 }
 
 impl Workspace {
@@ -119,6 +122,7 @@ impl Workspace {
             selection: None,
             properties: Properties::default(),
             message: None,
+            snap_options: SnapOptions::default(),
         }
     }
 
@@ -186,6 +190,19 @@ impl Workspace {
         }
         if self.tool != before {
             self.stop();
+        }
+        ui.separator();
+        ui.label(t("snap.title"));
+        let o = &mut self.snap_options;
+        for (on, key) in [
+            (&mut o.points, "snap.points"),
+            (&mut o.midpoints, "snap.midpoints"),
+            (&mut o.intersections, "snap.intersections"),
+            (&mut o.edges, "snap.edges"),
+            (&mut o.angles, "snap.angles"),
+            (&mut o.alignments, "snap.alignments"),
+        ] {
+            ui.checkbox(on, t(key));
         }
         ui.separator();
         for (layout, key) in [
@@ -283,16 +300,24 @@ impl Workspace {
             .start()
             .or(self.beam_start)
             .or(self.slab_points.last().copied());
-        let cursor = response.hover_pos().map(|p| {
-            let p = self.view.model(p);
-            match nearest_point(history.project(), &self.slab_points, p, snap) {
-                Some(q) => q,
-                None => match from {
-                    Some(start) if shift => orthogonal(start, p),
-                    _ => p,
-                },
-            }
+        let drawing: Vec<Point> = self
+            .wall
+            .points()
+            .iter()
+            .chain(&self.slab_points)
+            .chain(&self.beam_start)
+            .copied()
+            .collect();
+        let snapped = response.hover_pos().map(|p| {
+            Scene::new(history.project(), &drawing).snap(
+                &self.snap_options,
+                self.view.model(p),
+                from,
+                shift,
+                snap,
+            )
         });
+        let cursor = snapped.as_ref().map(|s| s.point);
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
         let mut changed = !typing && self.keys(ui, history, cursor);
@@ -319,6 +344,9 @@ impl Workspace {
             rectangle_from,
             cursor,
         );
+        if let Some(s) = &snapped {
+            self.view.snap_marks(&painter, s);
+        }
         if from.is_some() {
             ui.ctx().request_repaint();
         }
@@ -462,30 +490,6 @@ fn distance(a: Point, b: Point) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
-/// The wall end or slab corner closest to `p`, if closer than `tolerance`.
-// ponytail: scans every element; use a spatial index when projects get
-// large.
-fn nearest_point(project: &Project, drawing: &[Point], p: Point, tolerance: f64) -> Option<Point> {
-    project
-        .walls
-        .iter()
-        .flat_map(|w| [w.start, w.end])
-        .chain(project.slabs.iter().flat_map(|s| s.outline.iter().copied()))
-        .chain(drawing.iter().copied())
-        .filter(|q| distance(*q, p) <= tolerance)
-        .min_by(|a, b| distance(*a, p).total_cmp(&distance(*b, p)))
-}
-
-/// `p` moved onto the horizontal or the vertical through `start`, whichever
-/// is closer.
-fn orthogonal(start: Point, p: Point) -> Point {
-    if (p.x - start.x).abs() >= (p.y - start.y).abs() {
-        Point::new(p.x, start.y)
-    } else {
-        Point::new(start.x, p.y)
-    }
-}
-
 /// The element under `p`: openings first, then columns, beams, walls and
 /// slabs.
 fn hit(project: &Project, plan: &[LayerPlan], p: Point) -> Option<Id> {
@@ -535,22 +539,4 @@ fn wall_at(project: &Project, plan: &[LayerPlan], p: Point) -> Option<(Id, f64, 
         + (p.y - w.start.y) * (w.end.y - w.start.y))
         / length;
     Some((id, along, length))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shift_keeps_the_wall_square() {
-        let s = Point::new(0.0, 0.0);
-        assert_eq!(
-            orthogonal(s, Point::new(1000.0, 30.0)),
-            Point::new(1000.0, 0.0)
-        );
-        assert_eq!(
-            orthogonal(s, Point::new(-30.0, 900.0)),
-            Point::new(0.0, 900.0)
-        );
-    }
 }

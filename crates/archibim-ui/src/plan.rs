@@ -6,9 +6,11 @@ use archibim_geometry::{
 use archibim_model::{Id, LayerRole, Point, Project, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
-use crate::WallTool;
+use crate::{Snap, SnapKind, WallTool};
 
 const INK: Color32 = Color32::from_gray(40);
+/// Colour of drawing guides.
+const GUIDE: Color32 = Color32::from_rgb(220, 90, 40);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
 pub(crate) const CONCRETE: Color32 = Color32::from_gray(150);
@@ -215,6 +217,49 @@ impl PlanView {
     }
 
     /// The element being drawn, from its last point to the pointer.
+    /// The guides of a snap, dashed, and a mark telling what it found.
+    pub(crate) fn snap_marks(&self, painter: &Painter, snap: &Snap) {
+        let guide = Stroke::new(1.0, GUIDE);
+        for &(a, b) in &snap.guides {
+            painter.extend(Shape::dashed_line(
+                &[self.screen(a), self.screen(b)],
+                guide,
+                6.0,
+                4.0,
+            ));
+        }
+        let c = self.screen(snap.point);
+        let r = 5.0;
+        let mark = Stroke::new(1.5, GUIDE);
+        match snap.kind {
+            SnapKind::Free | SnapKind::Direction => {}
+            SnapKind::Point => {
+                painter.rect_stroke(
+                    Rect::from_center_size(c, Vec2::splat(2.0 * r)),
+                    0.0,
+                    mark,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            SnapKind::Midpoint => {
+                let points = vec![
+                    c + Vec2::new(0.0, -r),
+                    c + Vec2::new(r, r),
+                    c + Vec2::new(-r, r),
+                ];
+                painter.add(Shape::closed_line(points, mark));
+            }
+            SnapKind::Intersection => {
+                painter.line_segment([c + Vec2::splat(-r), c + Vec2::splat(r)], mark);
+                painter.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], mark);
+            }
+            SnapKind::Edge | SnapKind::Alignment => {
+                painter.line_segment([c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0)], mark);
+                painter.line_segment([c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r)], mark);
+            }
+        }
+    }
+
     pub fn preview(
         &self,
         painter: &Painter,

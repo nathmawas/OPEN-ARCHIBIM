@@ -46,6 +46,11 @@ impl WallTool {
         self.points.last().copied()
     }
 
+    /// The points clicked so far in the current chain or rectangle.
+    pub fn points(&self) -> &[Point] {
+        &self.points
+    }
+
     /// The length typed so far, in millimetres.
     pub fn typed(&self) -> &str {
         &self.typed
