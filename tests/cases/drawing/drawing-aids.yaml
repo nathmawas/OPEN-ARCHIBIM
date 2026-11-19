@@ -1,0 +1,24 @@
+id: drawing-aids
+title: The pointer snaps to points, angles and alignments while drawing
+status: proposed
+given: |
+  A plan with walls and a slab. The architect draws a new wall, a slab, a
+  beam or places a column. Every drawing aid is on.
+when: |
+  The architect moves the pointer, holds Shift, or turns aids off one by
+  one in the tools palette.
+expect:
+  - Near an end or a corner, a middle or a crossing of two lines, the
+    pointer lands exactly on it, and a mark shows which it is.
+  - Near the face or the edge of an element, the pointer lands on it.
+  - Close to a direction every 45 degrees from the last point, the pointer
+    follows that direction.
+  - Holding Shift locks the nearest of those directions, wherever the
+    pointer goes.
+  - On that direction, the length stops level with the end of a parallel
+    wall, or any point nearby; a dashed guide joins the two.
+  - Away from the last point, the pointer lines up horizontally or
+    vertically with a nearby point, with a dashed guide.
+  - Points win over alignments, and alignments over edges.
+  - Each aid can be turned off; with all of them off, the pointer is free.
+  - The aids change nothing in the model and are not undo steps.

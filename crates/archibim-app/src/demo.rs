@@ -4,9 +4,9 @@
 
 use archibim_commands::{Command, History};
 use archibim_model::{
-    Beam, Column, Framing, Hand, Id, Layer, LayerRole, LevelKind, LevelRef, Material, NominalSize,
-    Opening, OpeningKind, Operation, Part, Performance, Point, Project, RenovationStatus, Slab,
-    Story, Wall,
+    Align, Anchor, Beam, Column, Framing, Hand, Id, Layer, LayerRole, LevelKind, LevelRef,
+    Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
+    RenovationStatus, Slab, Story, Wall, WallReference,
 };
 use archibim_ui::Templates;
 
@@ -107,6 +107,9 @@ pub fn house() -> Result<(History, Id, Templates)> {
             story: ground,
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
+            reference: WallReference::LeftFace,
+            offset: 0.0,
+            sweep: 0.0,
             layers: layers.clone(),
             bottom: level(ground, 0.0),
             top: level(first, 0.0),
@@ -126,6 +129,8 @@ pub fn house() -> Result<(History, Id, Templates)> {
             id: Id(0),
             story: ground,
             at: Point::new(0.0, 0.0),
+            anchor: Anchor::default(),
+            angle: 0.0,
             width: 300.0,
             depth: 300.0,
             material: concrete,
@@ -140,7 +145,11 @@ pub fn house() -> Result<(History, Id, Templates)> {
             width: 200.0,
             height: 400.0,
             material: concrete,
-            top: level(first, 0.0),
+            anchor: Anchor {
+                width: Align::Middle,
+                depth: Align::First,
+            },
+            level: level(first, 0.0),
         },
         window: Opening {
             id: Id(0),

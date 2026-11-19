@@ -3,12 +3,14 @@
 use archibim_geometry::{
     LayerPlan, beam_outline, column_outline, opening_outline, triangulate, visible_edges,
 };
-use archibim_model::{Id, LayerRole, Point, Project};
+use archibim_model::{Id, LayerRole, Point, Project, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
-use crate::WallTool;
+use crate::{Snap, SnapKind, WallTool};
 
 const INK: Color32 = Color32::from_gray(40);
+/// Colour of drawing guides.
+const GUIDE: Color32 = Color32::from_rgb(220, 90, 40);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
 pub(crate) const CONCRETE: Color32 = Color32::from_gray(150);
@@ -215,6 +217,63 @@ impl PlanView {
     }
 
     /// The element being drawn, from its last point to the pointer.
+    /// The contour the space bar would take, dashed.
+    pub(crate) fn contour(&self, painter: &Painter, outline: &[Point]) {
+        let mut points: Vec<Pos2> = outline.iter().map(|q| self.screen(*q)).collect();
+        if let Some(&first) = points.first() {
+            points.push(first);
+        }
+        painter.extend(Shape::dashed_line(
+            &points,
+            Stroke::new(2.0, GUIDE),
+            8.0,
+            4.0,
+        ));
+    }
+
+    /// The guides of a snap, dashed, and a mark telling what it found.
+    pub(crate) fn snap_marks(&self, painter: &Painter, snap: &Snap) {
+        let guide = Stroke::new(1.0, GUIDE);
+        for &(a, b) in &snap.guides {
+            painter.extend(Shape::dashed_line(
+                &[self.screen(a), self.screen(b)],
+                guide,
+                6.0,
+                4.0,
+            ));
+        }
+        let c = self.screen(snap.point);
+        let r = 5.0;
+        let mark = Stroke::new(1.5, GUIDE);
+        match snap.kind {
+            SnapKind::Free | SnapKind::Direction => {}
+            SnapKind::Point => {
+                painter.rect_stroke(
+                    Rect::from_center_size(c, Vec2::splat(2.0 * r)),
+                    0.0,
+                    mark,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            SnapKind::Midpoint => {
+                let points = vec![
+                    c + Vec2::new(0.0, -r),
+                    c + Vec2::new(r, r),
+                    c + Vec2::new(-r, r),
+                ];
+                painter.add(Shape::closed_line(points, mark));
+            }
+            SnapKind::Intersection => {
+                painter.line_segment([c + Vec2::splat(-r), c + Vec2::splat(r)], mark);
+                painter.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], mark);
+            }
+            SnapKind::Edge | SnapKind::Alignment => {
+                painter.line_segment([c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0)], mark);
+                painter.line_segment([c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r)], mark);
+            }
+        }
+    }
+
     pub fn preview(
         &self,
         painter: &Painter,
@@ -235,9 +294,28 @@ impl PlanView {
             painter.add(Shape::closed_line(points, line));
             return;
         }
+        if let Some(shape) = wall.preview(p) {
+            let points = shape.iter().map(|q| self.screen(*q)).collect();
+            painter.add(Shape::line(points, line));
+            return;
+        }
         if let Some(start) = wall.start() {
             let end = wall.typed_end(start, p).unwrap_or(p);
             painter.line_segment([self.screen(start), self.screen(end)], line);
+            // The faces, placed from the clicked reference line.
+            let ghost = Wall {
+                start,
+                end,
+                ..wall.template.clone()
+            };
+            if let Some((a, b)) = ghost.left_face() {
+                let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+                let k = ghost.thickness() / l;
+                // The right of (dx, dy) is (dy, -dx).
+                let r = |q: Point| Point::new(q.x + (b.y - a.y) * k, q.y - (b.x - a.x) * k);
+                let outline = [a, b, r(b), r(a)].iter().map(|q| self.screen(*q)).collect();
+                painter.add(Shape::closed_line(outline, Stroke::new(1.0, SELECTED)));
+            }
             let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
             let label = match wall.typed() {
                 "" => format!("{length:.0}"),

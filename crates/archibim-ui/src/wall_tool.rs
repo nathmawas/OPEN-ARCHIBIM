@@ -1,8 +1,9 @@
-//! The wall tool: one wall, a chain of walls or a rectangle, drawn on a
-//! reference line, with lengths typed at the keyboard.
+//! The wall tool: one wall, a chain of walls or a rectangle, with lengths
+//! typed at the keyboard. The clicks are the walls' reference line, chosen
+//! in the template.
 
 use archibim_commands::{Command, History};
-use archibim_model::{Id, Point, Wall};
+use archibim_model::{Point, Wall};
 
 /// How the clicks make walls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,59 +16,33 @@ pub enum WallMethod {
     /// Two opposite corners, four walls drawn clockwise, so that the left
     /// face (the first layer) is outside.
     Rectangle,
-}
-
-/// Which line of the wall the clicks place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Reference {
-    /// The left face, where the first layer is.
-    Left,
-    /// The middle of the build-up.
-    Axis,
-    /// The right face, where the last layer is.
-    Right,
-}
-
-impl Reference {
-    /// How far the left face is from the clicked line, as a share of the
-    /// thickness, towards the left.
-    fn share(self) -> f64 {
-        match self {
-            Self::Left => 0.0,
-            Self::Axis => 0.5,
-            Self::Right => 1.0,
-        }
-    }
+    /// One side from two clicks, then the depth: a rectangle at any angle.
+    RotatedRectangle,
+    /// The centre, then a point of the circle: two half circles.
+    Circle,
+    /// The centre, the start, then the end: the shorter way round.
+    Arc,
 }
 
 /// Draws walls from clicks.
-// ponytail: the reference line lives in the tool, not in the wall; a wall
-// changed later keeps its left face in place. Store it on the wall when
-// the wall tool is detailed.
 #[derive(Clone, Debug)]
 pub struct WallTool {
-    /// The wall to copy: build-up, story, bottom and top.
+    /// The wall to copy: build-up, reference line, story, bottom and top.
     pub template: Wall,
     /// How clicks make walls.
     pub method: WallMethod,
-    /// Which line the clicks place.
-    pub reference: Reference,
     /// The points clicked in the current chain or rectangle.
     points: Vec<Point>,
-    /// The walls drawn so far in the current chain.
-    walls: Vec<Id>,
     typed: String,
 }
 
 impl WallTool {
-    /// A wall tool drawing chains of copies of `template` on their left face.
+    /// A wall tool drawing chains of copies of `template`.
     pub fn new(template: Wall) -> Self {
         Self {
             template,
             method: WallMethod::Chain,
-            reference: Reference::Left,
             points: Vec::new(),
-            walls: Vec::new(),
             typed: String::new(),
         }
     }
@@ -75,6 +50,11 @@ impl WallTool {
     /// Where the wall being drawn starts, if one is.
     pub fn start(&self) -> Option<Point> {
         self.points.last().copied()
+    }
+
+    /// The points clicked so far in the current chain or rectangle.
+    pub fn points(&self) -> &[Point] {
+        &self.points
     }
 
     /// The length typed so far, in millimetres.
@@ -129,8 +109,28 @@ impl WallTool {
     /// Escape: stops drawing.
     pub fn stop(&mut self) {
         self.points.clear();
-        self.walls.clear();
         self.typed.clear();
+    }
+
+    /// What the next click would draw, as a line through its points, for
+    /// the preview of the methods that need more than one step.
+    pub fn preview(&self, p: Point) -> Option<Vec<Point>> {
+        match (self.method, self.points.as_slice()) {
+            (WallMethod::RotatedRectangle, &[a, b]) => {
+                let mut corners = rotated(a, b, p)?;
+                corners.push(corners[0]);
+                Some(corners)
+            }
+            (WallMethod::Circle, &[c]) => {
+                let r = distance(c, p);
+                Some(arc_points(c, r, 0.0, std::f64::consts::TAU))
+            }
+            (WallMethod::Arc, &[c, a]) => {
+                let (from, sweep) = arc_sweep(c, a, p)?;
+                Some(arc_points(c, distance(c, a), from, sweep))
+            }
+            _ => None,
+        }
     }
 
     fn place(&mut self, history: &mut History, p: Point) -> bool {
@@ -141,72 +141,93 @@ impl WallTool {
         if distance(last, p) < 1.0 {
             return false;
         }
-        let shift = self.reference.share() * self.template.thickness();
         match self.method {
+            WallMethod::RotatedRectangle => match *self.points.as_slice() {
+                [_] => {
+                    self.points.push(p);
+                    false
+                }
+                [a, b] => match rotated(a, b, p) {
+                    Some(corners) => self.outline(history, corners),
+                    None => false,
+                },
+                _ => false,
+            },
+            WallMethod::Circle => {
+                self.stop();
+                let r = distance(last, p);
+                let east = Point::new(last.x + r, last.y);
+                let west = Point::new(last.x - r, last.y);
+                let half = std::f64::consts::PI;
+                let commands = vec![
+                    Command::AddWall(self.curved(history, east, west, half)),
+                    Command::AddWall(self.curved(history, west, east, half)),
+                ];
+                history.run(Command::Group(commands)).is_ok()
+            }
+            WallMethod::Arc => match *self.points.as_slice() {
+                [_] => {
+                    self.points.push(p);
+                    false
+                }
+                [c, a] => {
+                    self.stop();
+                    let Some((_, sweep)) = arc_sweep(c, a, p) else {
+                        return false;
+                    };
+                    let r = distance(c, a);
+                    let end = (a.y - c.y).atan2(a.x - c.x) + sweep;
+                    let e = Point::new(c.x + r * end.cos(), c.y + r * end.sin());
+                    let wall = self.curved(history, a, e, sweep);
+                    history.run(Command::AddWall(wall)).is_ok()
+                }
+                _ => false,
+            },
             WallMethod::Rectangle => {
                 self.stop();
-                let Some(corners) = rectangle(last, p) else {
-                    return false;
-                };
-                let faces = offset(&corners, shift, true);
-                let commands = (0..4)
-                    .map(|i| Command::AddWall(self.wall(history, faces[i], faces[(i + 1) % 4])))
-                    .collect();
-                history.run(Command::Group(commands)).is_ok()
+                rectangle(last, p).is_some_and(|corners| self.outline(history, corners))
             }
             WallMethod::Single => {
                 self.stop();
-                let faces = offset(&[last, p], shift, false);
-                let wall = self.wall(history, faces[0], faces[1]);
+                let wall = self.wall(history, last, p);
                 history.run(Command::AddWall(wall)).is_ok()
             }
-            WallMethod::Chain => self.chain(history, p, shift),
+            WallMethod::Chain => {
+                let closes = self.points.len() >= 3 && distance(self.points[0], p) < 1.0;
+                let end = if closes { self.points[0] } else { p };
+                let wall = self.wall(history, last, end);
+                // ponytail: a refused wall is dropped; show the reason once
+                // the tool reports through the status bar.
+                let added = history.run(Command::AddWall(wall)).is_ok();
+                if closes {
+                    self.stop();
+                } else if added {
+                    self.points.push(p);
+                }
+                added
+            }
         }
     }
 
-    fn chain(&mut self, history: &mut History, p: Point, shift: f64) -> bool {
-        let closes = self.points.len() >= 3 && distance(self.points[0], p) < 1.0;
-        if !closes {
-            self.points.push(p);
+    /// Walls all around a closed outline, in one undo step. They run
+    /// clockwise, so that the first layer is outside.
+    pub fn outline(&mut self, history: &mut History, mut corners: Vec<Point>) -> bool {
+        self.stop();
+        if signed_area(&corners) > 0.0 {
+            corners.reverse();
         }
-        let faces = offset(&self.points, shift, closes);
-        // The new wall runs from corner `from` to corner `to`.
-        let n = self.points.len();
-        let (from, to) = if closes { (n - 1, 0) } else { (n - 2, n - 1) };
-        let mut commands = Vec::new();
-        // The previous wall now ends on the new corner.
-        if let Some(&previous) = self.walls.last()
-            && let Ok(w) = history.project().wall(previous)
-        {
-            commands.push(Command::ReplaceWall(Wall {
-                end: faces[from],
-                ..w.clone()
-            }));
+        let n = corners.len();
+        let commands = (0..n)
+            .map(|i| Command::AddWall(self.wall(history, corners[i], corners[(i + 1) % n])))
+            .collect();
+        n >= 3 && history.run(Command::Group(commands)).is_ok()
+    }
+
+    fn curved(&self, history: &mut History, start: Point, end: Point, sweep: f64) -> Wall {
+        Wall {
+            sweep,
+            ..self.wall(history, start, end)
         }
-        let wall = self.wall(history, faces[from], faces[to]);
-        let id = wall.id;
-        commands.push(Command::AddWall(wall));
-        // Closing: the first wall starts on the closing corner.
-        if closes
-            && let Some(&first) = self.walls.first()
-            && let Ok(w) = history.project().wall(first)
-        {
-            commands.push(Command::ReplaceWall(Wall {
-                start: faces[0],
-                ..w.clone()
-            }));
-        }
-        // ponytail: a refused wall is dropped; show the reason once the
-        // tool reports through the status bar.
-        let added = history.run(Command::Group(commands)).is_ok();
-        if closes {
-            self.stop();
-        } else if added {
-            self.walls.push(id);
-        } else {
-            self.points.pop();
-        }
-        added
     }
 
     fn wall(&self, history: &mut History, start: Point, end: Point) -> Wall {
@@ -232,6 +253,46 @@ pub fn rectangle(a: Point, c: Point) -> Option<Vec<Point>> {
     Some(corners)
 }
 
+/// The rectangle with side `a` to `b` and its depth out to `c`, or
+/// nothing if it is flat.
+fn rotated(a: Point, b: Point, c: Point) -> Option<Vec<Point>> {
+    let l = distance(a, b);
+    let (dx, dy) = ((b.x - a.x) / l, (b.y - a.y) / l);
+    // Signed depth towards the left of a to b.
+    let h = -(c.x - a.x) * dy + (c.y - a.y) * dx;
+    if l < 1.0 || h.abs() < 1.0 {
+        return None;
+    }
+    let up = |q: Point| Point::new(q.x - dy * h, q.y + dx * h);
+    Some(vec![a, b, up(b), up(a)])
+}
+
+/// The start angle and the turn, the shorter way round, of the arc of
+/// centre `c` from `a` towards `p`.
+fn arc_sweep(c: Point, a: Point, p: Point) -> Option<(f64, f64)> {
+    if distance(c, a) < 1.0 || distance(c, p) < 1.0 {
+        return None;
+    }
+    let from = (a.y - c.y).atan2(a.x - c.x);
+    let to = (p.y - c.y).atan2(p.x - c.x);
+    let tau = std::f64::consts::TAU;
+    let mut sweep = (to - from).rem_euclid(tau);
+    if sweep > std::f64::consts::PI {
+        sweep -= tau;
+    }
+    (sweep.abs() > 1e-6).then_some((from, sweep))
+}
+
+fn arc_points(c: Point, r: f64, from: f64, sweep: f64) -> Vec<Point> {
+    let steps = 64;
+    (0..=steps)
+        .map(|k| {
+            let a = from + sweep * f64::from(k) / f64::from(steps);
+            Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+        })
+        .collect()
+}
+
 fn distance(a: Point, b: Point) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
@@ -246,57 +307,12 @@ fn signed_area(points: &[Point]) -> f64 {
         .sum()
 }
 
-/// The points moved `shift` to the left of the path through them, each
-/// corner where the moved segments meet.
-fn offset(points: &[Point], shift: f64, closed: bool) -> Vec<Point> {
-    let n = points.len();
-    if shift == 0.0 || n < 2 {
-        return points.to_vec();
-    }
-    let segments = if closed { n } else { n - 1 };
-    // Each segment moved: a point on it and its direction.
-    let moved: Vec<(Point, Point)> = (0..segments)
-        .map(|i| {
-            let (a, b) = (points[i], points[(i + 1) % n]);
-            let l = distance(a, b).max(1e-9);
-            let d = Point::new((b.x - a.x) / l, (b.y - a.y) / l);
-            (Point::new(a.x - d.y * shift, a.y + d.x * shift), d)
-        })
-        .collect();
-    let meet = |(p, d): (Point, Point), (q, e): (Point, Point)| {
-        let cross = d.x * e.y - d.y * e.x;
-        if cross.abs() < 1e-9 {
-            return q;
-        }
-        let t = ((q.x - p.x) * e.y - (q.y - p.y) * e.x) / cross;
-        Point::new(p.x + d.x * t, p.y + d.y * t)
-    };
-    (0..n)
-        .map(|i| {
-            let after = (i < segments).then(|| moved[i]);
-            let before = match i {
-                0 if closed => Some(moved[segments - 1]),
-                0 => None,
-                _ => Some(moved[i - 1]),
-            };
-            match (before, after) {
-                (Some(b), Some(a)) => meet(b, a),
-                (None, Some((p, _))) => p,
-                (Some((p, d)), None) => {
-                    let l = distance(points[i - 1], points[i]);
-                    Point::new(p.x + d.x * l, p.y + d.y * l)
-                }
-                (None, None) => points[i],
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use archibim_model::{
         Layer, LayerRole, LevelKind, LevelRef, Material, Project, RenovationStatus, Story,
+        WallReference,
     };
 
     type Result = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -325,6 +341,9 @@ mod tests {
             story,
             start: Point::new(0.0, 0.0),
             end: Point::new(1.0, 0.0),
+            reference: WallReference::LeftFace,
+            offset: 0.0,
+            sweep: 0.0,
             layers: vec![Layer {
                 role: LayerRole::LoadBearing,
                 material,
@@ -378,30 +397,34 @@ mod tests {
     fn a_rectangle_on_its_axis_is_four_walls_undone_at_once() -> Result {
         let (mut h, mut tool) = setup()?;
         tool.method = WallMethod::Rectangle;
-        tool.reference = Reference::Axis;
+        tool.template.reference = WallReference::Axis;
         tool.click(&mut h, Point::new(0.0, 0.0));
         assert!(tool.click(&mut h, Point::new(6000.0, 4000.0)));
         let walls = &h.project().walls;
         assert_eq!(walls.len(), 4);
-        // Clockwise, left face outside: 100 out of the clicked axis.
-        let xs: Vec<f64> = walls.iter().flat_map(|w| [w.start.x, w.end.x]).collect();
-        assert!(xs.iter().any(|x| (x + 100.0).abs() < 1e-6), "{xs:?}");
-        assert!(xs.iter().any(|x| (x - 6100.0).abs() < 1e-6), "{xs:?}");
         for i in 0..4 {
             assert!(
                 close(walls[i].end, walls[(i + 1) % 4].start),
-                "corners meet"
+                "corners meet on the clicks"
             );
         }
+        // Clockwise, left face outside: 100 out of the clicked axis.
+        let xs: Vec<f64> = walls
+            .iter()
+            .filter_map(Wall::left_face)
+            .flat_map(|(a, b)| [a.x, b.x])
+            .collect();
+        assert!(xs.iter().any(|x| (x + 100.0).abs() < 1e-6), "{xs:?}");
+        assert!(xs.iter().any(|x| (x - 6100.0).abs() < 1e-6), "{xs:?}");
         h.undo()?;
         assert!(h.project().walls.is_empty(), "one undo removes all four");
         Ok(())
     }
 
     #[test]
-    fn a_chain_on_its_right_face_moves_the_corner_and_closes() -> Result {
+    fn a_chain_on_its_right_face_keeps_the_clicks_and_closes() -> Result {
         let (mut h, mut tool) = setup()?;
-        tool.reference = Reference::Right;
+        tool.template.reference = WallReference::RightFace;
         // Clockwise, so the right face is inside, on the clicks.
         for (x, y) in [
             (0.0, 0.0),
@@ -414,21 +437,98 @@ mod tests {
         }
         let walls = &h.project().walls;
         assert_eq!(walls.len(), 4);
-        assert!(
-            close(walls[0].start, Point::new(-200.0, 200.0)),
-            "closed corner"
-        );
-        assert!(
-            close(walls[0].end, Point::new(4200.0, 200.0)),
-            "moved corner"
-        );
-        assert!(close(walls[3].end, walls[0].start));
+        assert!(close(walls[0].start, Point::new(0.0, 0.0)), "on the click");
+        assert!(close(walls[3].end, walls[0].start), "closed");
+        let (face, _) = walls[0].left_face().ok_or("no length")?;
+        assert!(close(face, Point::new(0.0, 200.0)), "left face outside");
         assert!(tool.start().is_none(), "closing stops the chain");
         h.undo()?;
+        assert_eq!(h.project().walls.len(), 3, "undo removes the last wall");
+        Ok(())
+    }
+
+    #[test]
+    fn a_flipped_wall_mirrors_about_its_line_and_keeps_its_openings() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Single;
+        tool.template.offset = 50.0;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(5000.0, 0.0));
+        let wall = h.project().walls[0].clone();
+        let (face, _) = wall.left_face().ok_or("no length")?;
+        assert!(close(face, Point::new(0.0, -50.0)), "offset to the right");
+        let opening = archibim_model::Opening {
+            id: h.new_id(),
+            wall: wall.id,
+            kind: archibim_model::OpeningKind::Interior,
+            position: 1000.0,
+            sill: 0.0,
+            height: 2000.0,
+            frame: 50.0,
+            parts: vec![archibim_model::Part {
+                width: 800.0,
+                operation: archibim_model::Operation::Fixed,
+            }],
+            nominal: archibim_model::NominalSize::ClearOpening,
+        };
+        h.run(Command::AddOpening(opening.clone()))?;
+        h.run(crate::properties::flip(h.project(), &wall))?;
+        let flipped = h.project().wall(wall.id)?;
+        let (face, end) = flipped.left_face().ok_or("no length")?;
+        // Seen from the other end, the left face is now at y = -50 on the
+        // line's other side: the wall lies between -50 and 150.
+        assert!(close(face, Point::new(5000.0, -50.0)), "{face:?}");
+        assert!(close(end, Point::new(0.0, -50.0)));
+        let moved = h.project().opening(opening.id)?;
+        assert!((moved.position - 3100.0).abs() < 1e-6, "{}", moved.position);
+        h.undo()?;
+        assert_eq!(h.project().wall(wall.id)?.start, wall.start, "one undo");
+        Ok(())
+    }
+
+    #[test]
+    fn a_rotated_rectangle_takes_a_side_then_a_depth() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::RotatedRectangle;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        assert!(!tool.click(&mut h, Point::new(3000.0, 3000.0)), "side only");
+        assert!(tool.preview(Point::new(-1000.0, 1000.0)).is_some());
+        assert!(tool.click(&mut h, Point::new(-1000.0, 1000.0)));
+        let walls = &h.project().walls;
+        assert_eq!(walls.len(), 4);
+        let side = distance(walls[0].start, walls[0].end);
+        let other = distance(walls[1].start, walls[1].end);
+        let (a, b) = (side.min(other), side.max(other));
+        assert!((a - 1000.0 * 2f64.sqrt()).abs() < 1e-6, "{a}");
+        assert!((b - 3000.0 * 2f64.sqrt()).abs() < 1e-6, "{b}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_circle_is_two_half_circles_and_an_arc_the_shorter_way() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Circle;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        assert!(tool.click(&mut h, Point::new(0.0, 2000.0)));
+        let walls = h.project().walls.clone();
+        assert_eq!(walls.len(), 2);
+        for w in &walls {
+            let (c, r) = w.arc().ok_or("not curved")?;
+            assert!(close(c, Point::new(0.0, 0.0)) && (r - 2000.0).abs() < 1e-6);
+        }
+        h.undo()?;
+        assert!(h.project().walls.is_empty(), "one undo");
+
+        tool.method = WallMethod::Arc;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(1000.0, 0.0));
+        assert!(tool.click(&mut h, Point::new(0.0, 500.0)));
+        let w = &h.project().walls[0];
         assert!(
-            close(h.project().walls[0].start, Point::new(0.0, 200.0)),
-            "undo puts the first corner back"
+            (w.sweep - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "quarter, anticlockwise"
         );
+        assert!(close(w.end, Point::new(0.0, 1000.0)), "on the circle");
         Ok(())
     }
 }

@@ -143,11 +143,10 @@ impl Project {
         Ok(())
     }
 
-    /// Adds a wall. Its story and materials must exist.
+    /// Adds a wall. Its story and materials must exist, and it needs a length.
     pub fn insert_wall(&mut self, wall: Wall) -> Result<(), ModelError> {
         self.check_free(wall.id)?;
-        self.story(wall.story)?;
-        self.check_layers(&wall.layers)?;
+        self.check_wall(&wall)?;
         self.walls.push(wall);
         Ok(())
     }
@@ -177,7 +176,11 @@ impl Project {
     /// Adds an opening. Its wall must exist.
     pub fn insert_opening(&mut self, opening: Opening) -> Result<(), ModelError> {
         self.check_free(opening.id)?;
-        self.wall(opening.wall)?;
+        if self.wall(opening.wall)?.sweep != 0.0 {
+            return Err(ModelError::Invalid(
+                "openings in curved walls are not supported yet",
+            ));
+        }
         self.openings.push(opening);
         Ok(())
     }
@@ -210,8 +213,7 @@ impl Project {
     /// Replaces a wall with a new state of itself, keeping its identifier,
     /// openings and junctions. Returns the previous state.
     pub fn replace_wall(&mut self, wall: Wall) -> Result<Wall, ModelError> {
-        self.story(wall.story)?;
-        self.check_layers(&wall.layers)?;
+        self.check_wall(&wall)?;
         Ok(std::mem::replace(self.wall_mut(wall.id)?, wall))
     }
 
@@ -231,6 +233,28 @@ impl Project {
     pub fn replace_beam(&mut self, beam: Beam) -> Result<Beam, ModelError> {
         self.check_beam(&beam)?;
         Ok(std::mem::replace(self.beam_mut(beam.id)?, beam))
+    }
+
+    fn check_wall(&self, wall: &Wall) -> Result<(), ModelError> {
+        self.story(wall.story)?;
+        self.check_layers(&wall.layers)?;
+        let length =
+            ((wall.end.x - wall.start.x).powi(2) + (wall.end.y - wall.start.y).powi(2)).sqrt();
+        if length < 1.0 {
+            return Err(ModelError::Invalid("a wall needs a length"));
+        }
+        if wall.sweep.abs() >= std::f64::consts::TAU - 1e-9 {
+            return Err(ModelError::Invalid(
+                "a curved wall turns through less than a full circle",
+            ));
+        }
+        // TODO: openings in curved walls, once the hole follows the arc.
+        if wall.sweep != 0.0 && self.openings.iter().any(|o| o.wall == wall.id) {
+            return Err(ModelError::Invalid(
+                "openings in curved walls are not supported yet",
+            ));
+        }
+        Ok(())
     }
 
     fn check_slab(&self, slab: &Slab) -> Result<(), ModelError> {
@@ -318,7 +342,7 @@ impl Project {
             || self
                 .beams
                 .iter()
-                .any(|b| b.story == id || b.top.story == id);
+                .any(|b| b.story == id || b.level.story == id);
         if used {
             return Err(ModelError::Invalid("walls still refer to this story"));
         }
