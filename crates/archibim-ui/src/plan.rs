@@ -217,6 +217,20 @@ impl PlanView {
     }
 
     /// The element being drawn, from its last point to the pointer.
+    /// The contour the space bar would take, dashed.
+    pub(crate) fn contour(&self, painter: &Painter, outline: &[Point]) {
+        let mut points: Vec<Pos2> = outline.iter().map(|q| self.screen(*q)).collect();
+        if let Some(&first) = points.first() {
+            points.push(first);
+        }
+        painter.extend(Shape::dashed_line(
+            &points,
+            Stroke::new(2.0, GUIDE),
+            8.0,
+            4.0,
+        ));
+    }
+
     /// The guides of a snap, dashed, and a mark telling what it found.
     pub(crate) fn snap_marks(&self, painter: &Painter, snap: &Snap) {
         let guide = Stroke::new(1.0, GUIDE);

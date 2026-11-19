@@ -4,6 +4,9 @@
 //!
 //! Pure functions: nothing here keeps state or draws.
 
+mod contour;
+pub use contour::contour_at;
+
 use archibim_model::{
     Beam, Column, Framing, Id, JunctionMode, LayerRole, LevelKind, LevelRef, ModelError, Point,
     Project, RenovationStatus, Wall,

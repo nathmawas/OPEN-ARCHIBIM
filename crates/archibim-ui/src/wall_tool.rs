@@ -117,13 +117,7 @@ impl WallTool {
         match self.method {
             WallMethod::Rectangle => {
                 self.stop();
-                let Some(corners) = rectangle(last, p) else {
-                    return false;
-                };
-                let commands = (0..4)
-                    .map(|i| Command::AddWall(self.wall(history, corners[i], corners[(i + 1) % 4])))
-                    .collect();
-                history.run(Command::Group(commands)).is_ok()
+                rectangle(last, p).is_some_and(|corners| self.outline(history, corners))
             }
             WallMethod::Single => {
                 self.stop();
@@ -145,6 +139,20 @@ impl WallTool {
                 added
             }
         }
+    }
+
+    /// Walls all around a closed outline, in one undo step. They run
+    /// clockwise, so that the first layer is outside.
+    pub fn outline(&mut self, history: &mut History, mut corners: Vec<Point>) -> bool {
+        self.stop();
+        if signed_area(&corners) > 0.0 {
+            corners.reverse();
+        }
+        let n = corners.len();
+        let commands = (0..n)
+            .map(|i| Command::AddWall(self.wall(history, corners[i], corners[(i + 1) % n])))
+            .collect();
+        n >= 3 && history.run(Command::Group(commands)).is_ok()
     }
 
     fn wall(&self, history: &mut History, start: Point, end: Point) -> Wall {

@@ -9,7 +9,9 @@ mod snap;
 mod wall_tool;
 
 use archibim_commands::{Command, History};
-use archibim_geometry::{LayerPlan, beam_outline, column_outline, contains, opening_outline};
+use archibim_geometry::{
+    LayerPlan, beam_outline, column_outline, contains, contour_at, opening_outline,
+};
 use archibim_model::{Beam, Column, Id, Opening, Point, Project, Slab, Wall};
 use egui::{Key, Modifiers, Sense, Ui};
 
@@ -321,10 +323,33 @@ impl Workspace {
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
         let mut changed = !typing && self.keys(ui, history, cursor);
-        if response.clicked()
-            && let Some(p) = cursor
-        {
-            changed |= self.click(history, plan, p, snap);
+        // Space held: the tool takes the contour under the pointer.
+        let space = !typing && ui.input(|i| i.key_down(Key::Space));
+        let contour = match (space, self.tool, response.hover_pos()) {
+            (true, Tool::Slab, Some(p)) => contour_at(
+                history.project(),
+                self.templates.slab.story,
+                self.view.model(p),
+            ),
+            (true, Tool::Wall, Some(p)) => contour_at(
+                history.project(),
+                self.wall.template.story,
+                self.view.model(p),
+            ),
+            _ => None,
+        };
+        if response.clicked() {
+            if let Some(outline) = contour.clone() {
+                changed |= match self.tool {
+                    Tool::Wall => self.wall.outline(history, outline),
+                    _ => {
+                        self.slab_points = outline;
+                        self.close_slab(history)
+                    }
+                };
+            } else if let Some(p) = cursor {
+                changed |= self.click(history, plan, p, snap);
+            }
         }
 
         self.view
@@ -344,7 +369,9 @@ impl Workspace {
             rectangle_from,
             cursor,
         );
-        if let Some(s) = &snapped {
+        if let Some(outline) = &contour {
+            self.view.contour(&painter, outline);
+        } else if let Some(s) = &snapped {
             self.view.snap_marks(&painter, s);
         }
         if from.is_some() {
