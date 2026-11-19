@@ -49,7 +49,11 @@ struct Edge {
 }
 
 fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
-    let walls: Vec<_> = project.walls.iter().filter(|w| w.story == story).collect();
+    let walls: Vec<_> = project
+        .walls
+        .iter()
+        .filter(|w| w.story == story && w.sweep == 0.0)
+        .collect();
     // Each wall end becomes a node: the end itself, or its foot on the wall
     // it stops against.
     let mut nodes: Vec<Point> = Vec::new();
@@ -223,6 +227,7 @@ mod tests {
                 end: Point::new(b.0, b.1),
                 reference: WallReference::Axis,
                 offset: 0.0,
+                sweep: 0.0,
                 layers: vec![Layer {
                     role: LayerRole::LoadBearing,
                     material,

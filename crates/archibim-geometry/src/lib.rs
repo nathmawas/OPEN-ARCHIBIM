@@ -65,8 +65,13 @@ pub fn plan_layers(
     phase: Phase,
 ) -> Result<Vec<LayerPlan>, ModelError> {
     let mut states = Vec::new();
+    let mut curved = Vec::new();
     for wall in project.walls.iter().filter(|w| w.story == story) {
-        states.push(WallState::new(project, wall, phase)?);
+        if wall.sweep == 0.0 {
+            states.push(WallState::new(project, wall, phase)?);
+        } else {
+            curved.extend(curved_layers(wall, phase));
+        }
     }
     for i in 0..states.len() {
         for j in i + 1..states.len() {
@@ -91,7 +96,7 @@ pub fn plan_layers(
             }
         }
     }
-    Ok(states
+    let mut layers: Vec<LayerPlan> = states
         .iter()
         .flat_map(|s| {
             s.bands
@@ -104,7 +109,9 @@ pub fn plan_layers(
                     members: band.members(&s.frame),
                 })
         })
-        .collect())
+        .collect();
+    layers.extend(curved);
+    Ok(layers)
 }
 
 /// The hole of an opening in plan: a rectangle across the whole thickness
@@ -121,6 +128,42 @@ pub fn opening_outline(project: &Project, opening: Id) -> Result<Vec<Point>, Mod
     let b = add(start, mul(d, o.position + o.wall_opening_width()));
     let t = wall.thickness();
     Ok(vec![a, b, add(b, mul(r, t)), add(a, mul(r, t))])
+}
+
+/// The layers of a curved wall, each a band between two arcs, with straight
+/// ends across the wall.
+// ponytail: curved walls do not join other walls yet; their ends stay
+// square. The arcs are cut into short segments for drawing only.
+fn curved_layers(wall: &Wall, phase: Phase) -> Vec<LayerPlan> {
+    let Some((centre, radius)) = wall.arc() else {
+        return Vec::new();
+    };
+    let side = wall.sweep.signum();
+    let start = (wall.start.y - centre.y).atan2(wall.start.x - centre.x);
+    let steps = ((wall.sweep.abs() / (std::f64::consts::PI / 48.0)).ceil() as usize).max(4);
+    let at = |r: f64, k: usize| {
+        let a = start + wall.sweep * k as f64 / steps as f64;
+        Point::new(centre.x + r * a.cos(), centre.y + r * a.sin())
+    };
+    // Going left from the reference line moves towards the centre on an
+    // anticlockwise arc.
+    let mut r = radius - side * wall.left_face_shift();
+    let mut layers = Vec::new();
+    for (index, layer) in wall.layers.iter().enumerate() {
+        let next = r + side * layer.thickness;
+        if phase.shows(layer.status) {
+            let mut polygon: Vec<Point> = (0..=steps).map(|k| at(r, k)).collect();
+            polygon.extend((0..=steps).rev().map(|k| at(next, k)));
+            layers.push(LayerPlan {
+                wall: wall.id,
+                layer: index,
+                polygons: vec![polygon],
+                members: Vec::new(),
+            });
+        }
+        r = next;
+    }
+    layers
 }
 
 /// A column in plan, placed by its anchor and turned by its angle.

@@ -176,7 +176,11 @@ impl Project {
     /// Adds an opening. Its wall must exist.
     pub fn insert_opening(&mut self, opening: Opening) -> Result<(), ModelError> {
         self.check_free(opening.id)?;
-        self.wall(opening.wall)?;
+        if self.wall(opening.wall)?.sweep != 0.0 {
+            return Err(ModelError::Invalid(
+                "openings in curved walls are not supported yet",
+            ));
+        }
         self.openings.push(opening);
         Ok(())
     }
@@ -238,6 +242,17 @@ impl Project {
             ((wall.end.x - wall.start.x).powi(2) + (wall.end.y - wall.start.y).powi(2)).sqrt();
         if length < 1.0 {
             return Err(ModelError::Invalid("a wall needs a length"));
+        }
+        if wall.sweep.abs() >= std::f64::consts::TAU - 1e-9 {
+            return Err(ModelError::Invalid(
+                "a curved wall turns through less than a full circle",
+            ));
+        }
+        // TODO: openings in curved walls, once the hole follows the arc.
+        if wall.sweep != 0.0 && self.openings.iter().any(|o| o.wall == wall.id) {
+            return Err(ModelError::Invalid(
+                "openings in curved walls are not supported yet",
+            ));
         }
         Ok(())
     }

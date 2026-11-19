@@ -60,3 +60,6 @@ snap.intersections = Intersections
 snap.edges = On edges
 snap.angles = Angles (45°)
 snap.alignments = Alignments
+method.rotated_rectangle = Rotated rectangle
+method.circle = Circle
+method.arc = Arc

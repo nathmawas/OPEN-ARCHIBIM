@@ -83,6 +83,7 @@ impl Fixture {
             end: Point::new(end.0, end.1),
             reference: WallReference::LeftFace,
             offset: 0.0,
+            sweep: 0.0,
             layers,
             bottom: LevelRef {
                 story: self.story0,
@@ -1152,5 +1153,56 @@ fn structure_placed_point() -> Result {
         .ok_or("no beam volume")?;
     assert!(close(prism.bottom, 2800.0), "bottom on the level");
     assert!(close(prism.top, 3200.0));
+    Ok(())
+}
+
+#[test]
+fn walls_curved() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    // A half circle of radius 3000 on its axis, 200 thick.
+    let id = f.wall((3000.0, 0.0), (-3000.0, 0.0), &[(concrete, 200.0)])?;
+    let mut wall = f.h.project().wall(id)?.clone();
+    wall.sweep = std::f64::consts::PI;
+    wall.reference = WallReference::Axis;
+    f.h.run(Command::ReplaceWall(wall.clone()))?;
+    let area = total_area(&f.plan()?);
+    let exact = std::f64::consts::PI / 2.0 * (3100.0_f64.powi(2) - 2900.0_f64.powi(2));
+    assert!((area - exact).abs() / exact < 1e-3, "{area} {exact}");
+    // Made thicker, the axis stays at radius 3000.
+    wall.layers[0].thickness = 300.0;
+    f.h.run(Command::ReplaceWall(wall.clone()))?;
+    let far = f
+        .plan()?
+        .iter()
+        .flat_map(|l| l.polygons.iter().flatten())
+        .map(|p| (p.x * p.x + p.y * p.y).sqrt())
+        .fold(0.0_f64, f64::max);
+    assert!((far - 3150.0).abs() < 1e-6, "{far}");
+    // Volumes follow the plan.
+    assert!(!model_prisms(f.h.project(), Phase::Proposed)?.is_empty());
+    let opening = Opening {
+        id: f.h.new_id(),
+        wall: id,
+        kind: OpeningKind::Interior,
+        position: 1000.0,
+        sill: 0.0,
+        height: 2000.0,
+        frame: 50.0,
+        parts: vec![Part {
+            width: 800.0,
+            operation: Operation::Fixed,
+        }],
+        nominal: NominalSize::ClearOpening,
+    };
+    assert!(
+        f.h.run(Command::AddOpening(opening)).is_err(),
+        "openings in curved walls come later"
+    );
+    wall.sweep = std::f64::consts::TAU;
+    assert!(
+        f.h.run(Command::ReplaceWall(wall)).is_err(),
+        "not a full turn"
+    );
     Ok(())
 }

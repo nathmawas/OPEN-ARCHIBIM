@@ -86,6 +86,10 @@ impl Scene {
         let mut lines = Vec::new();
         for w in &project.walls {
             s.points.extend([w.start, w.end]);
+            if let Some((centre, _)) = w.arc() {
+                s.points.push(centre);
+                continue;
+            }
             s.midpoints.push(mid(w.start, w.end));
             lines.push((w.start, w.end));
             if let Some((a, b)) = w.left_face() {

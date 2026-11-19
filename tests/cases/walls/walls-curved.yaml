@@ -1,0 +1,25 @@
+id: walls-curved
+title: A curved wall is a true arc, drawn as a circle or an arc
+status: proposed
+given: |
+  The wall tool, with a concrete wall 200 thick on its axis.
+when: |
+  The architect picks the circle method (centre, then a point of the
+  circle) or the arc method (centre, start, end), or the rotated rectangle
+  (one side, then the depth).
+expect:
+  - A circle gives two half-circle walls on the same centre and radius, in
+    one undo step.
+  - An arc turns the shorter way from the start to the end, and ends on the
+    circle.
+  - The layers of a curved wall follow concentric arcs; on its axis, a
+    wall 200 thick lies between radius minus 100 and radius plus 100, and
+    made thicker it keeps its axis.
+  - The arcs are exact in the model; only the screen cuts them into short
+    segments.
+  - A rotated rectangle takes its first side from two clicks at any angle,
+    then its depth from the third click, and gives four walls in one undo
+    step.
+questions:
+  - Curved walls do not join other walls yet, and openings cannot be placed
+    in them yet; the tool says so. Which comes first?

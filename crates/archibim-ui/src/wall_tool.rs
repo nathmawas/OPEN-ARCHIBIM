@@ -16,6 +16,12 @@ pub enum WallMethod {
     /// Two opposite corners, four walls drawn clockwise, so that the left
     /// face (the first layer) is outside.
     Rectangle,
+    /// One side from two clicks, then the depth: a rectangle at any angle.
+    RotatedRectangle,
+    /// The centre, then a point of the circle: two half circles.
+    Circle,
+    /// The centre, the start, then the end: the shorter way round.
+    Arc,
 }
 
 /// Draws walls from clicks.
@@ -106,6 +112,27 @@ impl WallTool {
         self.typed.clear();
     }
 
+    /// What the next click would draw, as a line through its points, for
+    /// the preview of the methods that need more than one step.
+    pub fn preview(&self, p: Point) -> Option<Vec<Point>> {
+        match (self.method, self.points.as_slice()) {
+            (WallMethod::RotatedRectangle, &[a, b]) => {
+                let mut corners = rotated(a, b, p)?;
+                corners.push(corners[0]);
+                Some(corners)
+            }
+            (WallMethod::Circle, &[c]) => {
+                let r = distance(c, p);
+                Some(arc_points(c, r, 0.0, std::f64::consts::TAU))
+            }
+            (WallMethod::Arc, &[c, a]) => {
+                let (from, sweep) = arc_sweep(c, a, p)?;
+                Some(arc_points(c, distance(c, a), from, sweep))
+            }
+            _ => None,
+        }
+    }
+
     fn place(&mut self, history: &mut History, p: Point) -> bool {
         let Some(&last) = self.points.last() else {
             self.points.push(p);
@@ -115,6 +142,47 @@ impl WallTool {
             return false;
         }
         match self.method {
+            WallMethod::RotatedRectangle => match *self.points.as_slice() {
+                [_] => {
+                    self.points.push(p);
+                    false
+                }
+                [a, b] => match rotated(a, b, p) {
+                    Some(corners) => self.outline(history, corners),
+                    None => false,
+                },
+                _ => false,
+            },
+            WallMethod::Circle => {
+                self.stop();
+                let r = distance(last, p);
+                let east = Point::new(last.x + r, last.y);
+                let west = Point::new(last.x - r, last.y);
+                let half = std::f64::consts::PI;
+                let commands = vec![
+                    Command::AddWall(self.curved(history, east, west, half)),
+                    Command::AddWall(self.curved(history, west, east, half)),
+                ];
+                history.run(Command::Group(commands)).is_ok()
+            }
+            WallMethod::Arc => match *self.points.as_slice() {
+                [_] => {
+                    self.points.push(p);
+                    false
+                }
+                [c, a] => {
+                    self.stop();
+                    let Some((_, sweep)) = arc_sweep(c, a, p) else {
+                        return false;
+                    };
+                    let r = distance(c, a);
+                    let end = (a.y - c.y).atan2(a.x - c.x) + sweep;
+                    let e = Point::new(c.x + r * end.cos(), c.y + r * end.sin());
+                    let wall = self.curved(history, a, e, sweep);
+                    history.run(Command::AddWall(wall)).is_ok()
+                }
+                _ => false,
+            },
             WallMethod::Rectangle => {
                 self.stop();
                 rectangle(last, p).is_some_and(|corners| self.outline(history, corners))
@@ -155,6 +223,13 @@ impl WallTool {
         n >= 3 && history.run(Command::Group(commands)).is_ok()
     }
 
+    fn curved(&self, history: &mut History, start: Point, end: Point, sweep: f64) -> Wall {
+        Wall {
+            sweep,
+            ..self.wall(history, start, end)
+        }
+    }
+
     fn wall(&self, history: &mut History, start: Point, end: Point) -> Wall {
         Wall {
             id: history.new_id(),
@@ -176,6 +251,46 @@ pub fn rectangle(a: Point, c: Point) -> Option<Vec<Point>> {
         corners.reverse();
     }
     Some(corners)
+}
+
+/// The rectangle with side `a` to `b` and its depth out to `c`, or
+/// nothing if it is flat.
+fn rotated(a: Point, b: Point, c: Point) -> Option<Vec<Point>> {
+    let l = distance(a, b);
+    let (dx, dy) = ((b.x - a.x) / l, (b.y - a.y) / l);
+    // Signed depth towards the left of a to b.
+    let h = -(c.x - a.x) * dy + (c.y - a.y) * dx;
+    if l < 1.0 || h.abs() < 1.0 {
+        return None;
+    }
+    let up = |q: Point| Point::new(q.x - dy * h, q.y + dx * h);
+    Some(vec![a, b, up(b), up(a)])
+}
+
+/// The start angle and the turn, the shorter way round, of the arc of
+/// centre `c` from `a` towards `p`.
+fn arc_sweep(c: Point, a: Point, p: Point) -> Option<(f64, f64)> {
+    if distance(c, a) < 1.0 || distance(c, p) < 1.0 {
+        return None;
+    }
+    let from = (a.y - c.y).atan2(a.x - c.x);
+    let to = (p.y - c.y).atan2(p.x - c.x);
+    let tau = std::f64::consts::TAU;
+    let mut sweep = (to - from).rem_euclid(tau);
+    if sweep > std::f64::consts::PI {
+        sweep -= tau;
+    }
+    (sweep.abs() > 1e-6).then_some((from, sweep))
+}
+
+fn arc_points(c: Point, r: f64, from: f64, sweep: f64) -> Vec<Point> {
+    let steps = 64;
+    (0..=steps)
+        .map(|k| {
+            let a = from + sweep * f64::from(k) / f64::from(steps);
+            Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+        })
+        .collect()
 }
 
 fn distance(a: Point, b: Point) -> f64 {
@@ -228,6 +343,7 @@ mod tests {
             end: Point::new(1.0, 0.0),
             reference: WallReference::LeftFace,
             offset: 0.0,
+            sweep: 0.0,
             layers: vec![Layer {
                 role: LayerRole::LoadBearing,
                 material,
@@ -367,6 +483,52 @@ mod tests {
         assert!((moved.position - 3100.0).abs() < 1e-6, "{}", moved.position);
         h.undo()?;
         assert_eq!(h.project().wall(wall.id)?.start, wall.start, "one undo");
+        Ok(())
+    }
+
+    #[test]
+    fn a_rotated_rectangle_takes_a_side_then_a_depth() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::RotatedRectangle;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        assert!(!tool.click(&mut h, Point::new(3000.0, 3000.0)), "side only");
+        assert!(tool.preview(Point::new(-1000.0, 1000.0)).is_some());
+        assert!(tool.click(&mut h, Point::new(-1000.0, 1000.0)));
+        let walls = &h.project().walls;
+        assert_eq!(walls.len(), 4);
+        let side = distance(walls[0].start, walls[0].end);
+        let other = distance(walls[1].start, walls[1].end);
+        let (a, b) = (side.min(other), side.max(other));
+        assert!((a - 1000.0 * 2f64.sqrt()).abs() < 1e-6, "{a}");
+        assert!((b - 3000.0 * 2f64.sqrt()).abs() < 1e-6, "{b}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_circle_is_two_half_circles_and_an_arc_the_shorter_way() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Circle;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        assert!(tool.click(&mut h, Point::new(0.0, 2000.0)));
+        let walls = h.project().walls.clone();
+        assert_eq!(walls.len(), 2);
+        for w in &walls {
+            let (c, r) = w.arc().ok_or("not curved")?;
+            assert!(close(c, Point::new(0.0, 0.0)) && (r - 2000.0).abs() < 1e-6);
+        }
+        h.undo()?;
+        assert!(h.project().walls.is_empty(), "one undo");
+
+        tool.method = WallMethod::Arc;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(1000.0, 0.0));
+        assert!(tool.click(&mut h, Point::new(0.0, 500.0)));
+        let w = &h.project().walls[0];
+        assert!(
+            (w.sweep - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "quarter, anticlockwise"
+        );
+        assert!(close(w.end, Point::new(0.0, 1000.0)), "on the circle");
         Ok(())
     }
 }

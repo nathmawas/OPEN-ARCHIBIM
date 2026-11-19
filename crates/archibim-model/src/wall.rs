@@ -110,6 +110,10 @@ pub struct Wall {
     /// How far that line lies to the right of `start` and `end`; zero
     /// puts it on them.
     pub offset: f64,
+    /// For a curved wall, the angle the reference line turns through from
+    /// `start` to `end`, in radians, positive anticlockwise. Zero for a
+    /// straight wall.
+    pub sweep: f64,
     /// The build-up, from the left face to the right face.
     pub layers: Vec<Layer>,
     /// Bottom of the wall.
@@ -152,8 +156,27 @@ impl Wall {
         }
     }
 
-    /// The left face, from the start end to the end end, or nothing if the
-    /// wall has no length.
+    /// The circle the reference line of a curved wall follows: centre and
+    /// radius. Nothing for a straight wall.
+    pub fn arc(&self) -> Option<(Point, f64)> {
+        let (dx, dy) = (self.end.x - self.start.x, self.end.y - self.start.y);
+        let chord = (dx * dx + dy * dy).sqrt();
+        if self.sweep.abs() < 1e-9 || chord < 1e-9 {
+            return None;
+        }
+        let half = self.sweep / 2.0;
+        // The centre lies on the perpendicular through the middle of the
+        // chord, to the left for an anticlockwise arc.
+        let k = 0.5 / half.tan();
+        let centre = Point::new(
+            (self.start.x + self.end.x) / 2.0 - dy * k,
+            (self.start.y + self.end.y) / 2.0 + dx * k,
+        );
+        Some((centre, chord / (2.0 * half.sin().abs())))
+    }
+
+    /// The left face of a straight wall, from the start end to the end end,
+    /// or nothing if the wall has no length.
     pub fn left_face(&self) -> Option<(Point, Point)> {
         let (dx, dy) = (self.end.x - self.start.x, self.end.y - self.start.y);
         let length = (dx * dx + dy * dy).sqrt();

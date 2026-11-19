@@ -228,6 +228,9 @@ impl Workspace {
                     (WallMethod::Single, "method.single"),
                     (WallMethod::Chain, "method.chain"),
                     (WallMethod::Rectangle, "method.rectangle"),
+                    (WallMethod::RotatedRectangle, "method.rotated_rectangle"),
+                    (WallMethod::Circle, "method.circle"),
+                    (WallMethod::Arc, "method.arc"),
                 ] {
                     ui.selectable_value(&mut w.method, method, t(key));
                 }

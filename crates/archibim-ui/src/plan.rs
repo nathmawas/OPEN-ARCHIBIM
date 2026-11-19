@@ -294,6 +294,11 @@ impl PlanView {
             painter.add(Shape::closed_line(points, line));
             return;
         }
+        if let Some(shape) = wall.preview(p) {
+            let points = shape.iter().map(|q| self.screen(*q)).collect();
+            painter.add(Shape::line(points, line));
+            return;
+        }
         if let Some(start) = wall.start() {
             let end = wall.typed_end(start, p).unwrap_or(p);
             painter.line_segment([self.screen(start), self.screen(end)], line);
