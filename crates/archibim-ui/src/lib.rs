@@ -10,9 +10,12 @@ mod wall_tool;
 
 use archibim_commands::{Command, History};
 use archibim_geometry::{
-    LayerPlan, beam_outline, column_outline, contains, contour_at, opening_outline,
+    LayerPlan, beam_outline, column_outline, contains, contour_at, opening_outline, roof_faces,
+    roof_overhang, stair_steps,
 };
-use archibim_model::{Beam, Column, Id, Layer, Opening, Point, Project, Slab, Wall};
+use archibim_model::{
+    Beam, Column, Id, Layer, Mesh, MeshPoint, Opening, Point, Project, Roof, Slab, Stair, Wall,
+};
 use egui::{Key, Modifiers, Sense, Ui};
 
 pub use i18n::t;
@@ -54,6 +57,14 @@ pub struct Templates {
     pub window: Opening,
     /// A door; its wall and position are set where it is placed.
     pub door: Opening,
+    /// Build-up and levels of new roofs; every edge of a new roof starts
+    /// with the first edge setting.
+    pub roof: Roof,
+    /// Material and levels of new terrain meshes; the outline is drawn at
+    /// height 0.
+    pub mesh: Mesh,
+    /// Width, levels and material of new stairs; the walking line is drawn.
+    pub stair: Stair,
 }
 
 /// The tool the plan's clicks go to.
@@ -71,6 +82,12 @@ pub enum Tool {
     Beam,
     /// Places a window or a door in a wall.
     Opening,
+    /// Draws roof outlines.
+    Roof,
+    /// Draws terrain mesh outlines.
+    Mesh,
+    /// Draws the walking line of a stair.
+    Stair,
 }
 
 /// How the clicks of the slab tool make an outline.
@@ -197,6 +214,9 @@ impl Workspace {
             (Tool::Column, "tool.column"),
             (Tool::Beam, "tool.beam"),
             (Tool::Opening, "tool.opening"),
+            (Tool::Roof, "tool.roof"),
+            (Tool::Stair, "tool.stair"),
+            (Tool::Mesh, "tool.mesh"),
         ] {
             ui.selectable_value(&mut self.tool, tool, t(key));
         }
@@ -285,7 +305,7 @@ impl Workspace {
                         }
                     });
             }
-            Tool::Slab => {
+            Tool::Slab | Tool::Roof | Tool::Mesh => {
                 for (method, key) in [
                     (SlabMethod::Polygon, "method.polygon"),
                     (SlabMethod::Rectangle, "method.rectangle"),
@@ -300,6 +320,9 @@ impl Workspace {
             Tool::Column | Tool::Opening | Tool::Select => {
                 ui.label(t("method.point"));
             }
+            Tool::Stair => {
+                ui.label(t("method.path"));
+            }
         }
         ui.separator();
         let mut element = match self.tool {
@@ -307,10 +330,13 @@ impl Workspace {
             Tool::Slab => Element::Slab(self.templates.slab.clone()),
             Tool::Column => Element::Column(self.templates.column.clone()),
             Tool::Beam => Element::Beam(self.templates.beam.clone()),
+            Tool::Roof => Element::Roof(self.templates.roof.clone()),
+            Tool::Mesh => Element::Mesh(self.templates.mesh.clone()),
+            Tool::Stair => Element::Stair(self.templates.stair.clone()),
             Tool::Opening if self.door => Element::Opening(self.templates.door.clone()),
             Tool::Opening | Tool::Select => Element::Opening(self.templates.window.clone()),
         };
-        fields(ui, &mut element, &project.materials);
+        fields(ui, &mut element, project);
         // Settings are not part of the model: they change at once, with no
         // command and no undo.
         match element {
@@ -318,6 +344,9 @@ impl Workspace {
             Element::Slab(s) => self.templates.slab = s,
             Element::Column(c) => self.templates.column = c,
             Element::Beam(b) => self.templates.beam = b,
+            Element::Roof(r) => self.templates.roof = r,
+            Element::Mesh(m) => self.templates.mesh = m,
+            Element::Stair(s) => self.templates.stair = s,
             Element::Opening(o) if self.door => self.templates.door = o,
             Element::Opening(o) => self.templates.window = o,
         }
@@ -388,13 +417,17 @@ impl Workspace {
         let mut changed = !typing && self.keys(ui, history, cursor);
         // Space held: the tool takes the contour under the pointer.
         let space = !typing && ui.input(|i| i.key_down(Key::Space));
-        let contour = match (space, self.tool, response.hover_pos()) {
-            (true, Tool::Slab, Some(p)) => contour_at(
-                history.project(),
-                self.templates.slab.story,
-                self.view.model(p),
-            ),
-            (true, Tool::Wall, Some(p)) => contour_at(
+        let outline_story = match self.tool {
+            Tool::Slab => Some(self.templates.slab.story),
+            Tool::Roof => Some(self.templates.roof.story),
+            Tool::Mesh => Some(self.templates.mesh.story),
+            _ => None,
+        };
+        let contour = match (space, outline_story, self.tool, response.hover_pos()) {
+            (true, Some(story), _, Some(p)) => {
+                contour_at(history.project(), story, self.view.model(p))
+            }
+            (true, None, Tool::Wall, Some(p)) => contour_at(
                 history.project(),
                 self.wall.template.story,
                 self.view.model(p),
@@ -407,7 +440,7 @@ impl Workspace {
                     Tool::Wall => self.wall.outline(history, outline),
                     _ => {
                         self.slab_points = outline;
-                        self.close_slab(history)
+                        self.close_outline(history)
                     }
                 };
             } else if let Some(p) = cursor {
@@ -419,7 +452,7 @@ impl Workspace {
             .paint(&painter, history.project(), plan, self.selection);
         let rectangle_from = match self.tool {
             Tool::Wall if self.wall.method == WallMethod::Rectangle => self.wall.start(),
-            Tool::Slab if self.slab_method == SlabMethod::Rectangle => {
+            Tool::Slab | Tool::Roof | Tool::Mesh if self.slab_method == SlabMethod::Rectangle => {
                 self.slab_points.first().copied()
             }
             _ => None,
@@ -446,11 +479,25 @@ impl Workspace {
     fn click(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
         match self.tool {
             Tool::Select => {
-                self.selection = hit(history.project(), plan, p);
+                self.selection = hit(history.project(), plan, p, snap);
                 false
             }
+            Tool::Stair => {
+                // Clicking the last point again ends the walking line.
+                if self.slab_points.len() >= 2
+                    && self
+                        .slab_points
+                        .last()
+                        .is_some_and(|q| distance(*q, p) <= snap)
+                {
+                    self.close_stair(history)
+                } else {
+                    self.slab_points.push(p);
+                    false
+                }
+            }
             Tool::Wall => self.wall.click(history, p),
-            Tool::Slab => {
+            Tool::Slab | Tool::Roof | Tool::Mesh => {
                 let closes = self.slab_points.len() >= 3
                     && self
                         .slab_points
@@ -460,9 +507,9 @@ impl Workspace {
                     && let Some(&a) = self.slab_points.first()
                 {
                     self.slab_points = rectangle(a, p).unwrap_or_default();
-                    self.close_slab(history)
+                    self.close_outline(history)
                 } else if closes {
-                    self.close_slab(history)
+                    self.close_outline(history)
                 } else {
                     self.slab_points.push(p);
                     false
@@ -516,14 +563,41 @@ impl Workspace {
         }
     }
 
-    fn close_slab(&mut self, history: &mut History) -> bool {
+    /// Makes the element of the active tool from the outline drawn.
+    fn close_outline(&mut self, history: &mut History) -> bool {
         let outline = std::mem::take(&mut self.slab_points);
-        let slab = Slab {
-            id: history.new_id(),
-            outline,
-            ..self.templates.slab.clone()
+        let id = history.new_id();
+        let command = match self.tool {
+            Tool::Roof => {
+                let first = self.templates.roof.edges.first().copied();
+                Command::AddRoof(Roof {
+                    id,
+                    edges: first.map(|e| vec![e; outline.len()]).unwrap_or_default(),
+                    outline,
+                    ..self.templates.roof.clone()
+                })
+            }
+            Tool::Mesh => Command::AddMesh(Mesh {
+                id,
+                outline: outline.iter().map(|&at| MeshPoint { at, z: 0.0 }).collect(),
+                ..self.templates.mesh.clone()
+            }),
+            _ => Command::AddSlab(Slab {
+                id,
+                outline,
+                ..self.templates.slab.clone()
+            }),
         };
-        self.run(history, Command::AddSlab(slab))
+        self.run(history, command)
+    }
+
+    fn close_stair(&mut self, history: &mut History) -> bool {
+        let stair = Stair {
+            id: history.new_id(),
+            path: std::mem::take(&mut self.slab_points),
+            ..self.templates.stair.clone()
+        };
+        self.run(history, Command::AddStair(stair))
     }
 
     /// Keyboard: undo, redo, delete, escape, and the typed lengths.
@@ -565,8 +639,11 @@ impl Workspace {
                     Key::Enter if self.tool == Tool::Wall => {
                         changed |= self.wall.enter(history, cursor);
                     }
-                    Key::Enter if self.tool == Tool::Slab => {
-                        changed |= self.close_slab(history);
+                    Key::Enter if matches!(self.tool, Tool::Slab | Tool::Roof | Tool::Mesh) => {
+                        changed |= self.close_outline(history);
+                    }
+                    Key::Enter if self.tool == Tool::Stair => {
+                        changed |= self.close_stair(history);
                     }
                     _ => {}
                 },
@@ -581,9 +658,10 @@ fn distance(a: Point, b: Point) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
-/// The element under `p`: openings first, then columns, beams, walls and
-/// slabs.
-fn hit(project: &Project, plan: &[LayerPlan], p: Point) -> Option<Id> {
+/// The element under `p`: openings first, then columns, beams, stairs,
+/// walls, the lines of roofs (within `near`), slabs, the inside of roofs
+/// and terrain meshes.
+fn hit(project: &Project, plan: &[LayerPlan], p: Point, near: f64) -> Option<Id> {
     let opening = project
         .openings
         .iter()
@@ -603,6 +681,44 @@ fn hit(project: &Project, plan: &[LayerPlan], p: Point) -> Option<Id> {
             .find(|b| beam_outline(b).is_some_and(|o| contains(&o, p)))
             .map(|b| b.id)
     };
+    let stair = || {
+        project.stairs.iter().map(|s| s.id).find(|&id| {
+            project.stair(id).is_ok_and(|s| {
+                let (b, t) = (project.level(&s.bottom), project.level(&s.top));
+                stair_steps(s, b.unwrap_or(0.0), t.unwrap_or(0.0))
+                    .treads
+                    .iter()
+                    .any(|tread| contains(tread, p))
+            })
+        })
+    };
+    let roof_line = || {
+        project
+            .roofs
+            .iter()
+            .find(|r| {
+                roof_faces(r).iter().any(|f| {
+                    let n = f.polygon.len();
+                    (0..n)
+                        .any(|i| segment_distance(p, f.polygon[i], f.polygon[(i + 1) % n]) <= near)
+                })
+            })
+            .map(|r| r.id)
+    };
+    let roof = || {
+        project
+            .roofs
+            .iter()
+            .find(|r| contains(&roof_overhang(r), p))
+            .map(|r| r.id)
+    };
+    let mesh = || {
+        project
+            .meshes
+            .iter()
+            .find(|m| contains(&m.outline.iter().map(|q| q.at).collect::<Vec<_>>(), p))
+            .map(|m| m.id)
+    };
     let wall = || wall_at(project, plan, p).map(|(id, _, _)| id);
     let slab = || {
         project
@@ -614,8 +730,24 @@ fn hit(project: &Project, plan: &[LayerPlan], p: Point) -> Option<Id> {
     opening
         .or_else(column)
         .or_else(beam)
+        .or_else(stair)
         .or_else(wall)
+        .or_else(roof_line)
         .or_else(slab)
+        .or_else(roof)
+        .or_else(mesh)
+}
+
+/// Distance from `p` to the segment from `a` to `b`.
+fn segment_distance(p: Point, a: Point, b: Point) -> f64 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let l2 = dx * dx + dy * dy;
+    let k = if l2 > 0.0 {
+        (((p.x - a.x) * dx + (p.y - a.y) * dy) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    distance(p, Point::new(a.x + dx * k, a.y + dy * k))
 }
 
 /// The wall under `p`, with the distance of `p` along it and its length.

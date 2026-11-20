@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use archibim_geometry::{Phase, model_prisms};
+use archibim_geometry::{Phase, model_blocks};
 use archibim_model::{Id, Project};
 use archibim_render::{Camera, Frame, Scene};
 use egui::{Color32, Key, PointerButton, Sense, Ui};
@@ -10,6 +10,7 @@ use egui::{Color32, Key, PointerButton, Sense, Ui};
 use crate::plan::{CONCRETE, SELECTED, fill_of};
 
 const BACKGROUND: Color32 = Color32::from_gray(225);
+const TERRAIN: Color32 = Color32::from_rgb(170, 190, 140);
 
 /// The camera and the triangles of the model, rebuilt when it changes.
 #[derive(Debug, Default)]
@@ -25,12 +26,14 @@ impl ModelView {
     pub fn rebuild(&mut self, project: &Project, selection: Option<Id>) {
         // ponytail: a model that fails to compute shows nothing; show the
         // error once the interface has a message area for it.
-        let prisms = model_prisms(project, Phase::Proposed).unwrap_or_default();
-        let coloured: Vec<_> = prisms
+        let blocks = model_blocks(project, Phase::Proposed).unwrap_or_default();
+        let coloured: Vec<_> = blocks
             .iter()
             .map(|p| {
                 let color = if selection == Some(p.element) {
                     SELECTED
+                } else if project.meshes.iter().any(|m| m.id == p.element) {
+                    TERRAIN
                 } else {
                     p.role.map_or(CONCRETE, fill_of)
                 };

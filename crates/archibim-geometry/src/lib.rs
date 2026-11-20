@@ -5,7 +5,12 @@
 //! Pure functions: nothing here keeps state or draws.
 
 mod contour;
+mod envelope;
 pub use contour::contour_at;
+pub use envelope::{
+    Block, RISER_TARGET, RoofFace, StairSteps, mesh_blocks, mesh_contours, mesh_triangles,
+    roof_blocks, roof_faces, roof_overhang, stair_steps,
+};
 
 use archibim_model::{
     Beam, Column, Framing, Id, JunctionMode, LayerRole, LevelKind, LevelRef, ModelError, Point,
@@ -315,7 +320,32 @@ pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, Model
             push(beam.id, None, outline, bottom, top);
         }
     }
+    // ponytail: each step is solid down to the foot of the stair; a flight
+    // with its own underside comes with stringers and landings.
+    for stair in &project.stairs {
+        let bottom = project.level(&stair.bottom)?;
+        let steps = stair_steps(stair, bottom, project.level(&stair.top)?);
+        for (tread, top) in steps.treads.into_iter().zip(steps.heights) {
+            push(stair.id, None, tread, bottom, top);
+        }
+    }
     Ok(prisms)
+}
+
+/// Every volume of the 3D view: the prisms of [`model_prisms`], the
+/// planes of roofs and the triangles of terrain meshes.
+pub fn model_blocks(project: &Project, phase: Phase) -> Result<Vec<Block>, ModelError> {
+    let mut blocks: Vec<Block> = model_prisms(project, phase)?
+        .iter()
+        .map(Block::from)
+        .collect();
+    for roof in &project.roofs {
+        blocks.extend(roof_blocks(roof, project.level(&roof.eaves)?, phase));
+    }
+    for mesh in &project.meshes {
+        blocks.extend(mesh_blocks(mesh, project.level(&mesh.level)?));
+    }
+    Ok(blocks)
 }
 
 /// Is `p` inside the closed polygon?
@@ -430,6 +460,11 @@ pub fn triangulate(polygon: &[Point]) -> Vec<[usize; 3]> {
 
 /// Area of a closed polygon.
 pub fn polygon_area(polygon: &[Point]) -> f64 {
+    polygon_signed_area(polygon).abs()
+}
+
+/// Area of a closed polygon, positive when it turns anticlockwise.
+fn polygon_signed_area(polygon: &[Point]) -> f64 {
     let n = polygon.len();
     let twice: f64 = (0..n)
         .map(|i| {
@@ -437,7 +472,7 @@ pub fn polygon_area(polygon: &[Point]) -> f64 {
             a.x * b.y - b.x * a.y
         })
         .sum();
-    twice.abs() / 2.0
+    twice / 2.0
 }
 
 // ---------------------------------------------------------------------------

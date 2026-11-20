@@ -1,9 +1,10 @@
 //! The plan view: navigation and drawing of the model.
 
 use archibim_geometry::{
-    LayerPlan, beam_outline, column_outline, opening_outline, triangulate, visible_edges,
+    LayerPlan, beam_outline, column_outline, mesh_contours, opening_outline, roof_faces,
+    stair_steps, triangulate, visible_edges,
 };
-use archibim_model::{Id, LayerRole, Point, Project, Wall};
+use archibim_model::{Id, LayerRole, Point, Project, Stair, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
 use crate::{Snap, SnapKind, WallTool};
@@ -13,6 +14,15 @@ const INK: Color32 = Color32::from_gray(40);
 const GUIDE: Color32 = Color32::from_rgb(220, 90, 40);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
+/// Fill of terrain meshes in plan.
+const TERRAIN: Color32 = Color32::from_rgb(232, 240, 222);
+/// Contour lines: one every interval, a stronger one every fifth.
+const CONTOUR: f64 = 500.0;
+/// Height of the plan cut above the foot of a stair: treads above it are
+/// dashed.
+// ponytail: one cut height for every stair; a setting of the story or the
+// view once views have their own settings.
+const STAIR_CUT: f64 = 1100.0;
 pub(crate) const CONCRETE: Color32 = Color32::from_gray(150);
 /// Fill colour of framing members (studs, joists).
 const MEMBER: Color32 = Color32::from_rgb(160, 110, 60);
@@ -128,6 +138,16 @@ impl PlanView {
                 Stroke::new(1.0, INK)
             }
         };
+        for mesh in &project.meshes {
+            let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
+            self.polygon(painter, &outline, TERRAIN, stroke(mesh.id));
+            let level = project.level(&mesh.level).unwrap_or(0.0);
+            for (h, a, b) in mesh_contours(mesh, level, CONTOUR) {
+                let major = (h / CONTOUR).round() as i64 % 5 == 0;
+                let width = if major { 1.2 } else { 0.5 };
+                painter.line_segment([self.screen(a), self.screen(b)], Stroke::new(width, INK));
+            }
+        }
         for slab in &project.slabs {
             self.polygon(painter, &slab.outline, SLAB, stroke(slab.id));
         }
@@ -174,6 +194,66 @@ impl PlanView {
                 painter.extend(Shape::dashed_line(&points, stroke(beam.id), 8.0, 5.0));
             }
         }
+        for stair in &project.stairs {
+            self.stair(painter, project, stair, stroke(stair.id));
+        }
+        // Roofs over everything, as lines: the overhang and the ridges,
+        // hips and valleys where the planes meet; the wall line dashed.
+        for roof in &project.roofs {
+            let s = stroke(roof.id);
+            for face in roof_faces(roof) {
+                let points = face.polygon.iter().map(|p| self.screen(*p)).collect();
+                painter.add(Shape::closed_line(points, s));
+            }
+            let mut line: Vec<Pos2> = roof.outline.iter().map(|p| self.screen(*p)).collect();
+            if let Some(first) = line.first().copied() {
+                line.push(first);
+            }
+            painter.extend(Shape::dashed_line(
+                &line,
+                Stroke::new(0.8, s.color),
+                6.0,
+                4.0,
+            ));
+        }
+    }
+
+    /// A stair: its treads, dashed above the plan cut, and the walking line
+    /// with an arrow pointing up the stair.
+    fn stair(&self, painter: &Painter, project: &Project, stair: &Stair, stroke: Stroke) {
+        let (Ok(bottom), Ok(top)) = (project.level(&stair.bottom), project.level(&stair.top))
+        else {
+            return;
+        };
+        let steps = stair_steps(stair, bottom, top);
+        for (tread, h) in steps.treads.iter().zip(&steps.heights) {
+            if *h <= bottom + STAIR_CUT {
+                self.polygon(painter, tread, Color32::WHITE, stroke);
+            } else {
+                let mut points: Vec<Pos2> = tread.iter().map(|p| self.screen(*p)).collect();
+                if let Some(first) = points.first().copied() {
+                    points.push(first);
+                }
+                painter.extend(Shape::dashed_line(
+                    &points,
+                    Stroke::new(0.8, stroke.color),
+                    5.0,
+                    4.0,
+                ));
+            }
+        }
+        let line: Vec<Pos2> = stair.path.iter().map(|p| self.screen(*p)).collect();
+        painter.add(Shape::line(line.clone(), Stroke::new(1.0, stroke.color)));
+        if let [.., a, b] = line[..] {
+            let d = (b - a).normalized() * 10.0;
+            let side = Vec2::new(-d.y, d.x) * 0.5;
+            painter.add(Shape::convex_polygon(
+                vec![b, b - d + side, b - d - side],
+                stroke.color,
+                Stroke::NONE,
+            ));
+        }
+        painter.circle_stroke(line[0], 4.0, Stroke::new(1.0, stroke.color));
     }
 
     /// The symbol of an opening: a frame with its glass for a window, a leaf

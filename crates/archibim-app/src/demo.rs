@@ -1,12 +1,14 @@
 //! A demonstration house, built through commands: a rectangle of external
 //! walls, two partitions crossing each other, a timber frame annex, a slab,
-//! a column, a beam, a window and a door.
+//! a column, a beam, a window and a door, a gabled roof, a shed roof over
+//! the annex, a turning stair and the terrain around.
 
 use archibim_commands::{Command, History};
 use archibim_model::{
     Align, Anchor, Beam, Column, Framing, Hand, Id, Layer, LayerRole, LevelKind, LevelRef,
-    Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
-    RenovationStatus, Slab, Story, Wall, WallReference,
+    Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part, Performance,
+    Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story, Wall,
+    WallReference,
 };
 use archibim_ui::{Preset, Templates};
 
@@ -51,6 +53,8 @@ pub fn house() -> Result<(History, Id, Templates)> {
     let osb = material("mat.osb", 4)?;
     let board = material("mat.plasterboard", 1)?;
     let block = material("mat.concrete_block", 7)?;
+    let tiles = material("mat.tiles", 1)?;
+    let soil = material("mat.soil", 0)?;
 
     let layer = |role, material, thickness| Layer {
         role,
@@ -103,6 +107,11 @@ pub fn house() -> Result<(History, Id, Templates)> {
         story,
         kind: LevelKind::Structural,
         offset,
+    };
+    let finished = |story| LevelRef {
+        story,
+        kind: LevelKind::Finished,
+        offset: 0.0,
     };
     let mut ids = Vec::new();
     for (start, end, layers) in walls {
@@ -203,6 +212,41 @@ pub fn house() -> Result<(History, Id, Templates)> {
             }],
             nominal: NominalSize::ClearOpening,
         },
+        roof: Roof {
+            id: Id(0),
+            story: ground,
+            outline: Vec::new(),
+            edges: vec![RoofEdge {
+                slope: Some(35f64.to_radians()),
+                overhang: 400.0,
+            }],
+            layers: vec![
+                layer(LayerRole::Covering, tiles, 40.0),
+                layer(LayerRole::Insulation, wool, 200.0),
+                layer(LayerRole::LoadBearing, timber, 60.0),
+            ],
+            eaves: level(first, 0.0),
+            plane: RoofPlane::Bottom,
+        },
+        mesh: Mesh {
+            id: Id(0),
+            story: ground,
+            outline: Vec::new(),
+            inner: Vec::new(),
+            level: finished(ground),
+            bottom: -1000.0,
+            material: soil,
+        },
+        stair: Stair {
+            id: Id(0),
+            story: ground,
+            path: Vec::new(),
+            width: 900.0,
+            bottom: finished(ground),
+            top: finished(first),
+            risers: None,
+            material: concrete,
+        },
     };
 
     let slab = Slab {
@@ -243,6 +287,76 @@ pub fn house() -> Result<(History, Id, Templates)> {
         ..templates.door.clone()
     };
     h.run(Command::AddOpening(door))?;
+
+    let points = |xy: &[(f64, f64)]| xy.iter().map(|&(x, y)| Point::new(x, y)).collect();
+    let main: Vec<Point> = points(&[
+        (0.0, 0.0),
+        (10000.0, 0.0),
+        (10000.0, -8000.0),
+        (0.0, -8000.0),
+    ]);
+    // Sloped on the long sides, gables on the short ones.
+    let sloped = templates.roof.edges[0];
+    let gable = RoofEdge {
+        slope: None,
+        overhang: 150.0,
+    };
+    let id = h.new_id();
+    h.run(Command::AddRoof(Roof {
+        id,
+        edges: vec![sloped, gable, sloped, gable],
+        outline: main,
+        ..templates.roof.clone()
+    }))?;
+    // The annex: one plane, low on its far side.
+    let id = h.new_id();
+    h.run(Command::AddRoof(Roof {
+        id,
+        outline: points(&[
+            (10000.0, -2000.0),
+            (14000.0, -2000.0),
+            (14000.0, -6000.0),
+            (10000.0, -6000.0),
+        ]),
+        edges: vec![
+            gable,
+            RoofEdge {
+                slope: Some(10f64.to_radians()),
+                overhang: 400.0,
+            },
+            gable,
+            RoofEdge {
+                slope: None,
+                overhang: 0.0,
+            },
+        ],
+        ..templates.roof.clone()
+    }))?;
+    // A quarter-turn stair in the corner room, up to the first floor.
+    let id = h.new_id();
+    h.run(Command::AddStair(Stair {
+        id,
+        path: points(&[(800.0, -7100.0), (3300.0, -7100.0), (3300.0, -5550.0)]),
+        ..templates.stair.clone()
+    }))?;
+    // The terrain, falling away to the south, below the ground floor.
+    let at = |x, y, z| MeshPoint {
+        at: Point::new(x, y),
+        z,
+    };
+    let id = h.new_id();
+    h.run(Command::AddMesh(Mesh {
+        id,
+        outline: vec![
+            at(-6000.0, 6000.0, -200.0),
+            at(20000.0, 6000.0, -600.0),
+            at(20000.0, -16000.0, -2400.0),
+            at(-6000.0, -16000.0, -1800.0),
+        ],
+        inner: vec![at(5000.0, -4000.0, -250.0), at(12000.0, -4000.0, -400.0)],
+        bottom: -4000.0,
+        ..templates.mesh.clone()
+    }))?;
     Ok((h, ground, templates))
 }
 

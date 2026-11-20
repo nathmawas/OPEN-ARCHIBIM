@@ -2,9 +2,10 @@
 //! in place. Every change becomes one command when the user lets go.
 
 use archibim_commands::Command;
+use archibim_geometry::stair_steps;
 use archibim_model::{
-    Align, Anchor, Beam, Column, Id, Layer, LayerRole, Material, Opening, Project,
-    RenovationStatus, Slab, Wall, WallReference,
+    Align, Anchor, Beam, Column, Id, Layer, LayerRole, Material, Mesh, MeshPoint, Opening, Point,
+    Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall, WallReference,
 };
 use egui::{DragValue, Response, Ui};
 
@@ -23,6 +24,12 @@ pub enum Element {
     Beam(Beam),
     /// An opening.
     Opening(Opening),
+    /// A roof.
+    Roof(Roof),
+    /// A terrain mesh.
+    Mesh(Mesh),
+    /// A stair.
+    Stair(Stair),
 }
 
 impl Element {
@@ -33,6 +40,9 @@ impl Element {
             .or_else(|| project.column(id).ok().cloned().map(Self::Column))
             .or_else(|| project.beam(id).ok().cloned().map(Self::Beam))
             .or_else(|| project.opening(id).ok().cloned().map(Self::Opening))
+            .or_else(|| project.roof(id).ok().cloned().map(Self::Roof))
+            .or_else(|| project.mesh(id).ok().cloned().map(Self::Mesh))
+            .or_else(|| project.stair(id).ok().cloned().map(Self::Stair))
     }
 
     fn id(&self) -> Id {
@@ -42,6 +52,9 @@ impl Element {
             Self::Column(e) => e.id,
             Self::Beam(e) => e.id,
             Self::Opening(e) => e.id,
+            Self::Roof(e) => e.id,
+            Self::Mesh(e) => e.id,
+            Self::Stair(e) => e.id,
         }
     }
 
@@ -52,6 +65,9 @@ impl Element {
             Self::Column(e) => Command::ReplaceColumn(e),
             Self::Beam(e) => Command::ReplaceBeam(e),
             Self::Opening(e) => Command::ReplaceOpening(e),
+            Self::Roof(e) => Command::ReplaceRoof(e),
+            Self::Mesh(e) => Command::ReplaceMesh(e),
+            Self::Stair(e) => Command::ReplaceStair(e),
         }
     }
 
@@ -64,6 +80,9 @@ impl Element {
             Self::Column(_) => Command::RemoveColumn(id),
             Self::Beam(_) => Command::RemoveBeam(id),
             Self::Opening(_) => Command::RemoveOpening(id),
+            Self::Roof(_) => Command::RemoveRoof(id),
+            Self::Mesh(_) => Command::RemoveMesh(id),
+            Self::Stair(_) => Command::RemoveStair(id),
         }
     }
 }
@@ -111,7 +130,7 @@ impl Properties {
             ui.label(t("props.none"));
             return None;
         };
-        let edit = fields(ui, draft, &project.materials);
+        let edit = fields(ui, draft, project);
         self.editing = edit.active;
         ui.separator();
         if let Element::Wall(w) = draft
@@ -158,7 +177,8 @@ pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
 
 /// Draws the parameters of `element`, edited in place, and tells what the
 /// widgets did.
-pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material]) -> Edit {
+pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> Edit {
+    let materials = &project.materials;
     let mut edit = Edit::default();
     let e = &mut edit;
     match element {
@@ -216,8 +236,161 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material])
                 number(ui, e, "p.part", &mut part.width, 1.0);
             }
         }
+        Element::Roof(r) => roof(ui, e, r, materials),
+        Element::Mesh(m) => mesh(ui, e, m, materials),
+        Element::Stair(s) => stair(ui, e, s, project),
     }
     edit
+}
+
+/// A roof: its build-up, its reference plane and, edge by edge, a slope or
+/// a gable and the overhang.
+fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
+    ui.label(t("el.roof"));
+    build_up(ui, e, &mut r.layers, materials, "buildup.layers_slab");
+    number(ui, e, "p.eaves_offset", &mut r.eaves.offset, -1.0e6);
+    ui.horizontal(|ui| {
+        for (plane, key) in [
+            (RoofPlane::Top, "roof.plane_top"),
+            (RoofPlane::Bottom, "roof.plane_bottom"),
+        ] {
+            e.track(&ui.selectable_value(&mut r.plane, plane, t(key)));
+        }
+    });
+    let numbered = r.edges.len() > 1;
+    for (i, edge) in r.edges.iter_mut().enumerate() {
+        ui.separator();
+        if numbered {
+            ui.label(format!("{} {}", t("roof.edge"), i + 1));
+        }
+        let mut gable = edge.slope.is_none();
+        let g = ui.checkbox(&mut gable, t("roof.gable"));
+        if g.changed() {
+            edge.slope = (!gable).then(|| 35f64.to_radians());
+        }
+        e.track(&g);
+        if let Some(slope) = &mut edge.slope {
+            ui.horizontal(|ui| {
+                ui.label(t("roof.slope"));
+                let mut degrees = slope.to_degrees();
+                let s = ui.add(
+                    DragValue::new(&mut degrees)
+                        .speed(0.5)
+                        .range(0.0..=89.0)
+                        .suffix(" °"),
+                );
+                if s.changed() {
+                    *slope = degrees.to_radians();
+                }
+                e.track(&s);
+            });
+        }
+        number(ui, e, "roof.overhang", &mut edge.overhang, 0.0);
+    }
+}
+
+/// A terrain mesh: the height of each point of its outline, the points
+/// inside it, its underside and material.
+fn mesh(ui: &mut Ui, e: &mut Edit, m: &mut Mesh, materials: &[Material]) {
+    ui.label(t("el.mesh"));
+    material(ui, e, &mut m.material, materials);
+    number(ui, e, "p.level_offset", &mut m.level.offset, -1.0e6);
+    number(ui, e, "mesh.bottom", &mut m.bottom, -1.0e6);
+    for (i, p) in m.outline.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} {}", t("mesh.point"), i + 1));
+            let r = ui.add(DragValue::new(&mut p.z).speed(5.0).suffix(" mm"));
+            e.track(&r);
+        });
+    }
+    ui.separator();
+    ui.label(t("mesh.inner"));
+    let mut remove = None;
+    for (i, p) in m.inner.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            for value in [&mut p.at.x, &mut p.at.y, &mut p.z] {
+                e.track(&ui.add(DragValue::new(value).speed(5.0)));
+            }
+            if ui
+                .small_button("×")
+                .on_hover_text(t("buildup.remove"))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        m.inner.remove(i);
+        e.commit = true;
+    }
+    if !m.outline.is_empty() && ui.button(t("mesh.add_point")).clicked() {
+        // In the middle of the outline, at its average height: then moved
+        // and raised by hand.
+        let n = m.outline.len() as f64;
+        let sum = |f: fn(&MeshPoint) -> f64| m.outline.iter().map(f).sum::<f64>() / n;
+        m.inner.push(MeshPoint {
+            at: Point::new(sum(|p| p.at.x), sum(|p| p.at.y)),
+            z: sum(|p| p.z),
+        });
+        e.commit = true;
+    }
+}
+
+/// A stair: width, levels, risers worked out or set, and what they give,
+/// with a warning when the steps are outside the usual comfort.
+fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
+    ui.label(t("el.stair"));
+    material(ui, e, &mut s.material, &project.materials);
+    number(ui, e, "p.width", &mut s.width, 1.0);
+    number(ui, e, "p.bottom_offset", &mut s.bottom.offset, -1.0e6);
+    number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
+    let (Ok(bottom), Ok(top)) = (project.level(&s.bottom), project.level(&s.top)) else {
+        return;
+    };
+    let steps = stair_steps(s, bottom, top);
+    let mut auto = s.risers.is_none();
+    let a = ui.checkbox(&mut auto, t("stair.auto_risers"));
+    if a.changed() {
+        s.risers = (!auto).then_some(steps.risers);
+    }
+    e.track(&a);
+    ui.horizontal(|ui| {
+        ui.label(t("stair.risers"));
+        match &mut s.risers {
+            Some(n) => e.track(&ui.add(DragValue::new(n).range(1..=200))),
+            None => {
+                ui.label(steps.risers.to_string());
+            }
+        }
+    });
+    ui.label(format!("{} {:.1} mm", t("stair.riser"), steps.riser));
+    ui.label(format!("{} {:.0} mm", t("stair.going"), steps.going));
+    let blondel = steps.blondel();
+    ui.label(format!("{} {blondel:.0} mm", t("stair.blondel")));
+    // Alert, never refuse.
+    // ponytail: French comfort ranges written here; preset data by country
+    // (TOOLS.md, rule 17).
+    if !(600.0..=640.0).contains(&blondel) || !(150.0..=200.0).contains(&steps.riser) {
+        ui.colored_label(ui.visuals().warn_fg_color, t("stair.comfort_warning"));
+    }
+}
+
+fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material]) {
+    let name = materials
+        .iter()
+        .find(|m| m.id == *id)
+        .map_or("?", |m| label(&m.name));
+    ui.horizontal(|ui| {
+        ui.label(t("p.material"));
+        egui::ComboBox::from_id_salt("element_material")
+            .selected_text(name)
+            .show_ui(ui, |ui| {
+                for m in materials {
+                    e.track(&ui.selectable_value(id, m.id, label(&m.name)));
+                }
+            });
+    });
 }
 
 /// The layers of a wall or a slab. One layer is a simple element, shown

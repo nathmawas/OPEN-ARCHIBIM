@@ -1,0 +1,25 @@
+id: stairs-walking-line
+title: A stair follows its walking line and shares the height between equal steps
+status: proposed
+given: |
+  Story 0 at level 0, story 1 at 2800. A stair 900 wide from the finished
+  floor of story 0 to the finished floor of story 1.
+when: |
+  The architect clicks the walking line from the foot, 3.75 m straight,
+  then clicks the last point again (or presses Enter).
+expect:
+  - The number of risers is worked out from the height, about 17 cm each - 16
+    risers of 175 mm; the upper floor is the last tread, so 15 treads of
+    250 mm share the walking line.
+  - The palette shows the riser height, the going and 2 risers + going (600
+    here). Outside 600 to 640 mm, or with risers outside 150 to 200 mm, a
+    warning is shown; the stair is never refused.
+  - The architect can set the number of risers by hand; the going follows.
+  - A walking line that turns makes treads that wrap around the corner; a
+    quarter-turn stair is the same element as a straight one.
+  - In plan the treads below the plan cut (1.10 m above the foot) are drawn,
+    those above it dashed; the walking line ends with an arrow at the head.
+  - Changing the story heights changes the steps, keeping the width and
+    the material. Undo restores the stair.
+  - Not yet - winders, curved and helical walking lines, landings, railings
+    and stringers, headroom check, the opening in the slab above.
