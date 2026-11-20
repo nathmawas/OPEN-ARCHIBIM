@@ -3,11 +3,12 @@
 
 use archibim_commands::Command;
 use archibim_model::{
-    Align, Anchor, Beam, Column, Id, LayerRole, Opening, Project, Slab, Wall, WallReference,
+    Align, Anchor, Beam, Column, Id, Layer, LayerRole, Material, Opening, Project,
+    RenovationStatus, Slab, Wall, WallReference,
 };
 use egui::{DragValue, Response, Ui};
 
-use crate::i18n::t;
+use crate::i18n::{label, t};
 
 /// Any element the palette can show.
 #[derive(Clone, Debug, PartialEq)]
@@ -110,7 +111,7 @@ impl Properties {
             ui.label(t("props.none"));
             return None;
         };
-        let edit = fields(ui, draft);
+        let edit = fields(ui, draft, &project.materials);
         self.editing = edit.active;
         ui.separator();
         if let Element::Wall(w) = draft
@@ -157,15 +158,13 @@ pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
 
 /// Draws the parameters of `element`, edited in place, and tells what the
 /// widgets did.
-pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
+pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material]) -> Edit {
     let mut edit = Edit::default();
     let e = &mut edit;
     match element {
         Element::Wall(w) => {
             ui.label(t("el.wall"));
-            for layer in &mut w.layers {
-                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
-            }
+            build_up(ui, e, &mut w.layers, materials);
             number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
             ui.label(t("settings.reference"));
@@ -182,9 +181,7 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
         }
         Element::Slab(s) => {
             ui.label(t("el.slab"));
-            for layer in &mut s.layers {
-                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
-            }
+            build_up(ui, e, &mut s.layers, materials);
             number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
         }
         Element::Column(c) => {
@@ -222,6 +219,140 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
     }
     edit
 }
+
+/// The layers of a wall or a slab. One layer is a simple element, shown
+/// as its material and thickness; several make a build-up, each layer with
+/// its role, listed from the left face (the top of a slab).
+fn build_up(ui: &mut Ui, e: &mut Edit, layers: &mut Vec<Layer>, materials: &[Material]) {
+    let simple = layers.len() == 1;
+    ui.label(t(if simple {
+        "buildup.simple"
+    } else {
+        "buildup.layers"
+    }));
+    let (mut remove, mut raise) = (None, None);
+    for (i, layer) in layers.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            if !simple {
+                egui::ComboBox::from_id_salt(("role", i))
+                    .selected_text(t(role_key(layer.role)))
+                    .show_ui(ui, |ui| {
+                        for role in ROLES {
+                            e.track(&ui.selectable_value(&mut layer.role, role, t(role_key(role))));
+                        }
+                    });
+            }
+            let name = |id| {
+                materials
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map_or("?", |m| label(&m.name))
+            };
+            egui::ComboBox::from_id_salt(("material", i))
+                .selected_text(name(layer.material))
+                .show_ui(ui, |ui| {
+                    for m in materials {
+                        e.track(&ui.selectable_value(&mut layer.material, m.id, label(&m.name)));
+                    }
+                });
+            let r = ui.add(
+                DragValue::new(&mut layer.thickness)
+                    .speed(1.0)
+                    .range(1.0..=1.0e5)
+                    .suffix(" mm"),
+            );
+            e.track(&r);
+            if !simple {
+                if i > 0
+                    && ui
+                        .small_button("↑")
+                        .on_hover_text(t("buildup.up"))
+                        .clicked()
+                {
+                    raise = Some(i);
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text(t("buildup.remove"))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            }
+        });
+    }
+    if let Some(i) = raise {
+        layers.swap(i - 1, i);
+        e.commit = true;
+    }
+    if let Some(i) = remove {
+        layers.remove(i);
+        e.commit = true;
+    }
+    if !simple {
+        ui.label(format!(
+            "{} {:.0} mm",
+            t("buildup.total"),
+            layers.iter().map(|l| l.thickness).sum::<f64>()
+        ));
+    }
+    ui.horizontal(|ui| {
+        if ui.button(t("buildup.add")).clicked()
+            && let Some(last) = layers.last()
+        {
+            // A thin finish on the right face, of the last material; the
+            // architect then sets it.
+            layers.push(Layer {
+                role: LayerRole::Finish,
+                thickness: 15.0,
+                status: RenovationStatus::New,
+                framing: None,
+                ..*last
+            });
+            e.commit = true;
+        }
+        if !simple && ui.button(t("buildup.make_simple")).clicked() {
+            *layers = vec![simplified(layers)];
+            e.commit = true;
+        }
+    });
+}
+
+/// One layer standing for a whole build-up: its total thickness, in the
+/// material of its first load-bearing layer, or of its thickest.
+pub(crate) fn simplified(layers: &[Layer]) -> Layer {
+    let thickness = layers.iter().map(|l| l.thickness).sum();
+    let main = layers
+        .iter()
+        .find(|l| l.role == LayerRole::LoadBearing)
+        .or_else(|| {
+            layers
+                .iter()
+                .max_by(|a, b| a.thickness.total_cmp(&b.thickness))
+        });
+    Layer {
+        role: LayerRole::LoadBearing,
+        thickness,
+        framing: None,
+        ..main.copied().unwrap_or(Layer {
+            role: LayerRole::LoadBearing,
+            material: Id(0),
+            thickness,
+            status: RenovationStatus::New,
+            framing: None,
+        })
+    }
+}
+
+const ROLES: [LayerRole; 7] = [
+    LayerRole::LoadBearing,
+    LayerRole::Insulation,
+    LayerRole::AirGap,
+    LayerRole::Membrane,
+    LayerRole::Lining,
+    LayerRole::Finish,
+    LayerRole::Covering,
+];
 
 fn number(ui: &mut Ui, edit: &mut Edit, key: &'static str, value: &mut f64, min: f64) {
     ui.horizontal(|ui| {
@@ -288,5 +419,38 @@ fn role_key(role: LayerRole) -> &'static str {
         LayerRole::Lining => "role.lining",
         LayerRole::Finish => "role.finish",
         LayerRole::Covering => "role.covering",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(role: LayerRole, material: u64, thickness: f64) -> Layer {
+        Layer {
+            role,
+            material: Id(material),
+            thickness,
+            status: RenovationStatus::New,
+            framing: None,
+        }
+    }
+
+    #[test]
+    fn a_build_up_made_simple_keeps_its_thickness_and_its_structure() {
+        let external = [
+            layer(LayerRole::Finish, 1, 20.0),
+            layer(LayerRole::Insulation, 2, 140.0),
+            layer(LayerRole::LoadBearing, 3, 200.0),
+            layer(LayerRole::Finish, 4, 15.0),
+        ];
+        let one = simplified(&external);
+        assert_eq!(one.thickness, 375.0);
+        assert_eq!(one.material, Id(3), "the load-bearing material");
+        let lining = [
+            layer(LayerRole::Finish, 1, 13.0),
+            layer(LayerRole::Insulation, 2, 100.0),
+        ];
+        assert_eq!(simplified(&lining).material, Id(2), "else the thickest");
     }
 }

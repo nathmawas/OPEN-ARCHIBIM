@@ -8,7 +8,7 @@ use archibim_model::{
     Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
     RenovationStatus, Slab, Story, Wall, WallReference,
 };
-use archibim_ui::Templates;
+use archibim_ui::{Preset, Templates};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -26,25 +26,28 @@ pub fn house() -> Result<(History, Id, Templates)> {
             floor_build_up: 0.0,
         }))?;
     }
-    let mut material = |priority| -> Result<Id> {
+    // Names are language pack keys: the starting library shows in the
+    // user's language; names the user types show as typed.
+    let mut material = |name: &str, priority| -> Result<Id> {
         let id = h.new_id();
         h.run(Command::AddMaterial(Material {
             id,
-            name: String::new(),
+            name: name.to_owned(),
             priority,
         }))?;
         Ok(id)
     };
-    let render = material(1)?;
-    let insulation = material(3)?;
-    let concrete = material(9)?;
-    let plaster = material(1)?;
-    let brick = material(5)?;
-    let fibre = material(2)?;
-    let wool = material(2)?;
-    let timber = material(6)?;
-    let osb = material(4)?;
-    let board = material(1)?;
+    let render = material("mat.render", 1)?;
+    let insulation = material("mat.insulation", 3)?;
+    let concrete = material("mat.concrete", 9)?;
+    let plaster = material("mat.plaster", 1)?;
+    let brick = material("mat.brick", 5)?;
+    let fibre = material("mat.wood_fibre", 2)?;
+    let wool = material("mat.mineral_wool", 2)?;
+    let timber = material("mat.timber", 6)?;
+    let osb = material("mat.osb", 4)?;
+    let board = material("mat.plasterboard", 1)?;
+    let block = material("mat.concrete_block", 7)?;
 
     let layer = |role, material, thickness| Layer {
         role,
@@ -116,8 +119,23 @@ pub fn house() -> Result<(History, Id, Templates)> {
         }))?;
     }
 
+    let simple = |material, thickness| vec![layer(LayerRole::LoadBearing, material, thickness)];
+    let preset = |name, layers: &Vec<Layer>| Preset {
+        name,
+        layers: layers.clone(),
+    };
+    let wall_presets = vec![
+        preset("preset.wall.concrete", &simple(concrete, 200.0)),
+        preset("preset.wall.block", &simple(block, 200.0)),
+        preset("preset.wall.brick", &simple(brick, 200.0)),
+        preset("preset.wall.partition", &simple(board, 72.0)),
+        preset("preset.wall.external", &external),
+        preset("preset.wall.masonry_partition", &partition),
+        preset("preset.wall.timber_frame", &timber_frame),
+    ];
     let templates = Templates {
         wall: h.project().walls.first().cloned().ok_or("no wall")?,
+        wall_presets,
         slab: Slab {
             id: Id(0),
             story: ground,

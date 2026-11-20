@@ -12,7 +12,7 @@ use archibim_commands::{Command, History};
 use archibim_geometry::{
     LayerPlan, beam_outline, column_outline, contains, contour_at, opening_outline,
 };
-use archibim_model::{Beam, Column, Id, Opening, Point, Project, Slab, Wall};
+use archibim_model::{Beam, Column, Id, Layer, Opening, Point, Project, Slab, Wall};
 use egui::{Key, Modifiers, Sense, Ui};
 
 pub use i18n::t;
@@ -27,11 +27,23 @@ pub use wall_tool::{WallMethod, WallTool};
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
 
+/// A ready-made build-up (TOOLS.md, rule 17): one layer for a simple wall,
+/// several for a composite one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preset {
+    /// Language pack key of its name.
+    pub name: &'static str,
+    /// Its layers, from the left face.
+    pub layers: Vec<Layer>,
+}
+
 /// The elements each tool copies when it draws.
 #[derive(Clone, Debug)]
 pub struct Templates {
     /// Build-up, story and heights of new walls.
     pub wall: Wall,
+    /// The build-ups offered to the wall tool, simple ones first.
+    pub wall_presets: Vec<Preset>,
     /// Build-up and level of new slabs; the outline is drawn.
     pub slab: Slab,
     /// Size, material and heights of new columns.
@@ -134,7 +146,7 @@ impl Workspace {
         egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
         egui::Panel::right("properties").show(ui, |ui| {
             if self.selection.is_none() && self.tool != Tool::Select {
-                self.settings(ui);
+                self.settings(ui, history.project());
             } else if let Some(command) =
                 self.properties.show(ui, history.project(), self.selection)
             {
@@ -218,7 +230,7 @@ impl Workspace {
 
     /// The settings of the active tool: how it draws, and the parameters
     /// of what it draws next.
-    fn settings(&mut self, ui: &mut Ui) {
+    fn settings(&mut self, ui: &mut Ui, project: &Project) {
         ui.heading(t("settings.title"));
         ui.label(t("settings.method"));
         match self.tool {
@@ -234,6 +246,26 @@ impl Workspace {
                 ] {
                     ui.selectable_value(&mut w.method, method, t(key));
                 }
+                ui.separator();
+                ui.label(t("buildup.preset"));
+                let chosen = self
+                    .templates
+                    .wall_presets
+                    .iter()
+                    .find(|p| p.layers == w.template.layers)
+                    .map_or(t("buildup.custom"), |p| t(p.name));
+                egui::ComboBox::from_id_salt("wall_preset")
+                    .selected_text(chosen)
+                    .show_ui(ui, |ui| {
+                        for p in &self.templates.wall_presets {
+                            if ui
+                                .selectable_label(p.layers == w.template.layers, t(p.name))
+                                .clicked()
+                            {
+                                w.template.layers = p.layers.clone();
+                            }
+                        }
+                    });
             }
             Tool::Slab => {
                 for (method, key) in [
@@ -260,7 +292,7 @@ impl Workspace {
             Tool::Opening if self.door => Element::Opening(self.templates.door.clone()),
             Tool::Opening | Tool::Select => Element::Opening(self.templates.window.clone()),
         };
-        fields(ui, &mut element);
+        fields(ui, &mut element, &project.materials);
         // Settings are not part of the model: they change at once, with no
         // command and no undo.
         match element {

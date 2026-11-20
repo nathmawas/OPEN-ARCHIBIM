@@ -1,0 +1,20 @@
+id: walls-simple-or-build-up
+title: A wall is simple, of one material, or a build-up of layers
+status: proposed
+given: |
+  The wall tool, offering ready-made walls: simple ones (concrete 200,
+  concrete block 200, brick 200, plasterboard partition 72) and build-ups
+  (concrete with external insulation, plastered brick partition, timber
+  frame).
+when: |
+  The architect picks one, draws, then edits the wall in its properties.
+expect:
+  - A simple wall shows one material and one thickness, with no layer
+    roles to set.
+  - A layer can be added to a simple wall; it becomes a build-up, and each
+    layer shows its role, material and thickness, with the total.
+  - A layer can be moved up or removed; the last layer cannot be removed.
+  - A build-up made simple keeps its total thickness, in the material of
+    its load-bearing layer, or of its thickest layer if none carries loads.
+  - Each change is one undo step, and the reference line stays where it
+    is.
