@@ -385,14 +385,12 @@ impl Project {
                 "a roof outline must enclose an area, with one setting per edge",
             ));
         }
+        // A negative overhang is a design choice (a roof stopping behind a
+        // parapet); a vertical or reversed slope has no plane yet.
         let steep = |s: f64| !(0.0..std::f64::consts::FRAC_PI_2 - 1e-3).contains(&s);
-        if roof
-            .edges
-            .iter()
-            .any(|e| e.slope.is_some_and(steep) || e.overhang < 0.0)
-        {
+        if roof.edges.iter().any(|e| e.slope.is_some_and(steep)) {
             return Err(ModelError::Invalid(
-                "a roof slope lies between flat and vertical, an overhang is not negative",
+                "a roof slope lies between flat and vertical",
             ));
         }
         Ok(())

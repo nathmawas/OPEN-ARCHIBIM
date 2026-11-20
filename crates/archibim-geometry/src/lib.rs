@@ -323,10 +323,10 @@ pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, Model
     // ponytail: each step is solid down to the foot of the stair; a flight
     // with its own underside comes with stringers and landings.
     for stair in &project.stairs {
-        let bottom = project.level(&stair.bottom)?;
-        let steps = stair_steps(stair, bottom, project.level(&stair.top)?);
-        for (tread, top) in steps.treads.into_iter().zip(steps.heights) {
-            push(stair.id, None, tread, bottom, top);
+        let (bottom, top) = (project.level(&stair.bottom)?, project.level(&stair.top)?);
+        let steps = stair_steps(stair, bottom, top);
+        for (tread, height) in steps.treads.into_iter().zip(steps.heights) {
+            push(stair.id, None, tread, bottom.min(top), height);
         }
     }
     Ok(prisms)

@@ -20,8 +20,9 @@ expect:
     as the architect chooses; layer thicknesses are square to the slope.
   - In plan the roof shows its overhang, its ridges and hips, and the wall
     line dashed.
-  - A slope between flat and vertical, an overhang of zero or more, and an
-    outline with an area are accepted; anything else is refused. Undo
+  - A slope between flat and vertical, any overhang, and an
+    outline with an area are accepted; a negative overhang too (a roof
+    stopping behind a parapet). A vertical slope is refused. Undo
     restores the roof.
   - Not yet - L-shaped outlines (hips and valleys of a concave outline),
     walls trimmed under the roof, gutters, fascias, skylights and dormers.

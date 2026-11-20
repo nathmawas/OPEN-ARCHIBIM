@@ -192,19 +192,62 @@ pub fn mesh_triangles(mesh: &Mesh) -> (Vec<MeshPoint>, Vec<[usize; 3]>) {
     let mut points = mesh.outline.clone();
     let outline: Vec<Point> = points.iter().map(|p| p.at).collect();
     let mut triangles = triangulate(&outline);
+    const ON: f64 = 0.5;
     for inner in &mesh.inner {
-        let Some(t) = triangles
-            .iter()
-            .position(|&[a, b, c]| contains(&[points[a].at, points[b].at, points[c].at], inner.at))
-        else {
+        let p = inner.at;
+        // On a corner already there: nothing to split.
+        if points.iter().any(|q| length(sub(q.at, p)) <= ON) {
+            continue;
+        }
+        let on_edge = |a: usize, b: usize| segment_distance(p, points[a].at, points[b].at) <= ON;
+        let Some(t) = triangles.iter().position(|&[a, b, c]| {
+            contains(&[points[a].at, points[b].at, points[c].at], p)
+                || on_edge(a, b)
+                || on_edge(b, c)
+                || on_edge(c, a)
+        }) else {
             continue;
         };
-        let [a, b, c] = triangles.swap_remove(t);
+        let tri = triangles.swap_remove(t);
+        // On an edge, both triangles that share it split in two; inside,
+        // the triangle splits in three.
+        let edge = (0..3).find(|&e| on_edge(tri[e], tri[(e + 1) % 3]));
         let k = points.len();
         points.push(*inner);
-        triangles.extend([[a, b, k], [b, c, k], [c, a, k]]);
+        match edge {
+            None => {
+                let [a, b, c] = tri;
+                triangles.extend([[a, b, k], [b, c, k], [c, a, k]]);
+            }
+            Some(e) => {
+                let (a, b, c) = (tri[e], tri[(e + 1) % 3], tri[(e + 2) % 3]);
+                triangles.extend([[a, k, c], [k, b, c]]);
+                if let Some(n) = triangles
+                    .iter()
+                    .position(|t| t.contains(&a) && t.contains(&b) && !t.contains(&k))
+                {
+                    let other = triangles.swap_remove(n);
+                    let Some(d) = other.iter().copied().find(|&v| v != a && v != b) else {
+                        continue;
+                    };
+                    triangles.extend([[b, k, d], [k, a, d]]);
+                }
+            }
+        }
     }
     (points, triangles)
+}
+
+/// Distance from `p` to the segment from `a` to `b`.
+fn segment_distance(p: Point, a: Point, b: Point) -> f64 {
+    let d = sub(b, a);
+    let l2 = dot(d, d);
+    let k = if l2 > 0.0 {
+        (dot(sub(p, a), d) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    length(sub(p, add(a, mul(d, k))))
 }
 
 /// The terrain as one block per triangle, from its flat underside to its
@@ -281,18 +324,18 @@ pub struct StairSteps {
 impl StairSteps {
     /// Twice the riser plus the going, the comfort measure of a stair.
     pub fn blondel(&self) -> f64 {
-        2.0 * self.riser + self.going
+        2.0 * self.riser.abs() + self.going
     }
 }
 
 /// The steps of a stair from `bottom` to `top`: the risers share the height
 /// equally, the treads share the walking line; the upper floor is the last
-/// tread.
+/// tread. A head below the foot gives a stair going down.
 pub fn stair_steps(stair: &Stair, bottom: f64, top: f64) -> StairSteps {
     let rise = top - bottom;
     let risers = stair
         .risers
-        .unwrap_or_else(|| ((rise / RISER_TARGET).round() as u32).max(1));
+        .unwrap_or_else(|| ((rise.abs() / RISER_TARGET).round() as u32).max(1));
     let riser = rise / f64::from(risers);
     let length: f64 = stair.path.windows(2).map(|w| length(sub(w[1], w[0]))).sum();
     let treads_count = risers.saturating_sub(1);
@@ -515,5 +558,265 @@ mod tests {
         let corner = sub_path(&s.path, 750.0, 1_250.0);
         assert_eq!(corner.len(), 3);
         assert_eq!(band(&corner, 900.0).len(), 6);
+    }
+
+    fn top_of(blocks: &[Block]) -> f64 {
+        blocks
+            .iter()
+            .flat_map(|b| b.top.iter().copied())
+            .fold(f64::MIN, f64::max)
+    }
+
+    #[test]
+    fn a_roof_outline_clockwise_or_not_gives_the_same_roof() {
+        let s = Some(45f64.to_radians());
+        let a = roof([s, None, s, None], 300.0);
+        // The same rectangle walked the other way: its edges are 2, 1, 0
+        // and 3 of the first.
+        let mut b = a.clone();
+        b.outline.reverse();
+        b.edges = vec![a.edges[2], a.edges[1], a.edges[0], a.edges[3]];
+        assert_ne!(
+            crate::polygon_signed_area(&a.outline).signum(),
+            crate::polygon_signed_area(&b.outline).signum()
+        );
+        for r in [&a, &b] {
+            let faces = roof_faces(r);
+            assert_eq!(faces.len(), 2);
+            let total: f64 = faces.iter().map(|f| crate::polygon_area(&f.polygon)).sum();
+            assert!((total - 10_600.0 * 6_600.0).abs() < 1.0, "{total}");
+            assert!((top_of(&roof_blocks(r, 0.0, Phase::Proposed)) - 3_000.0).abs() < 1.0);
+        }
+    }
+
+    #[test]
+    fn a_roof_of_gables_only_is_flat_and_a_zero_overhang_keeps_the_outline() {
+        let r = roof([None; 4], 400.0);
+        let faces = roof_faces(&r);
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].edge, None);
+        assert!((crate::polygon_area(&faces[0].polygon) - 10_800.0 * 6_800.0).abs() < 1.0);
+        let r = roof([Some(0.5); 4], 0.0);
+        assert_eq!(roof_overhang(&r), r.outline);
+    }
+
+    #[test]
+    fn a_triangular_roof_peaks_at_the_inradius_and_a_low_slope_does_not_panic() {
+        let s = Some(45f64.to_radians());
+        let mut r = roof([s; 4], 0.0);
+        r.outline = vec![
+            Point::new(0.0, 0.0),
+            Point::new(6_000.0, 0.0),
+            Point::new(0.0, 6_000.0),
+        ];
+        r.edges.truncate(3);
+        assert_eq!(roof_faces(&r).len(), 3);
+        let inradius = (12_000.0 - 6_000.0 * 2f64.sqrt()) / 2.0;
+        let peak = top_of(&roof_blocks(&r, 0.0, Phase::Proposed));
+        assert!((peak - inradius).abs() < 1.0, "{peak} {inradius}");
+        let low = 0.001;
+        let r = roof([Some(low), None, Some(low), None], 0.0);
+        assert_eq!(roof_faces(&r).len(), 2);
+        let peak = top_of(&roof_blocks(&r, 0.0, Phase::Proposed));
+        assert!((peak - 3_000.0 * low.tan()).abs() < 1e-6, "{peak}");
+    }
+
+    #[test]
+    fn a_concave_roof_does_not_panic() {
+        // L shape: the known limit (see the ponytail note on roof_faces).
+        let mut r = roof([Some(0.5); 4], 0.0);
+        r.outline = vec![
+            Point::new(0.0, 0.0),
+            Point::new(8_000.0, 0.0),
+            Point::new(8_000.0, 4_000.0),
+            Point::new(4_000.0, 4_000.0),
+            Point::new(4_000.0, 8_000.0),
+            Point::new(0.0, 8_000.0),
+        ];
+        r.edges = vec![
+            RoofEdge {
+                slope: Some(0.5),
+                overhang: 0.0
+            };
+            6
+        ];
+        assert!(!roof_faces(&r).is_empty());
+        assert!(!roof_blocks(&r, 0.0, Phase::Proposed).is_empty());
+    }
+
+    fn mp(x: f64, y: f64, z: f64) -> MeshPoint {
+        MeshPoint {
+            at: Point::new(x, y),
+            z,
+        }
+    }
+
+    fn mesh_of(outline: Vec<MeshPoint>, inner: Vec<MeshPoint>) -> Mesh {
+        Mesh {
+            id: Id(5),
+            story: Id(1),
+            outline,
+            inner,
+            level: level(),
+            bottom: -1_000.0,
+            material: Id(2),
+        }
+    }
+
+    fn square(z: f64) -> Vec<MeshPoint> {
+        vec![
+            mp(0.0, 0.0, z),
+            mp(10_000.0, 0.0, z),
+            mp(10_000.0, 10_000.0, z),
+            mp(0.0, 10_000.0, z),
+        ]
+    }
+
+    #[test]
+    fn a_flat_terrain_has_no_contours() {
+        for z in [0.0, 500.0, 750.0] {
+            let m = mesh_of(square(z), vec![mp(5_000.0, 2_000.0, z)]);
+            assert!(mesh_contours(&m, 0.0, 500.0).is_empty(), "z {z}");
+        }
+        let m = mesh_of(square(0.0), vec![mp(5_000.0, 2_000.0, 900.0)]);
+        assert!(mesh_contours(&m, 0.0, 0.0).is_empty());
+        assert!(mesh_contours(&m, 0.0, -5.0).is_empty());
+    }
+
+    #[test]
+    fn an_inner_point_on_the_diagonal_splits_both_triangles() {
+        // The centre of a square lies on the diagonal of the first split.
+        let m = mesh_of(square(0.0), vec![mp(5_000.0, 5_000.0, 2_000.0)]);
+        let (points, triangles) = mesh_triangles(&m);
+        assert_eq!(points.len(), 5);
+        assert!(
+            triangles.iter().all(|t| t.contains(&4)),
+            "a triangle is left whole beside the new point: {triangles:?}"
+        );
+    }
+
+    #[test]
+    fn inner_points_on_the_outline_or_on_a_vertex_do_not_panic() {
+        let on_edge = mesh_of(square(0.0), vec![mp(5_000.0, 0.0, 1_000.0)]);
+        let (points, triangles) = mesh_triangles(&on_edge);
+        assert!(!triangles.is_empty());
+        let on_vertex = mesh_of(square(0.0), vec![mp(0.0, 0.0, 1_000.0)]);
+        assert!(!mesh_triangles(&on_vertex).1.is_empty());
+        for m in [&on_edge, &on_vertex] {
+            for (h, a, b) in mesh_contours(m, 0.0, 250.0) {
+                assert!(h.is_finite() && a.x.is_finite() && b.y.is_finite());
+            }
+            assert_eq!(mesh_blocks(m, 0.0).len(), mesh_triangles(m).1.len());
+        }
+        // Reported, not asserted: whether the edge point is kept.
+        eprintln!("edge point kept: {}", points.len() == 5);
+    }
+
+    #[test]
+    fn a_concave_terrain_is_covered_by_its_triangles() {
+        let outline = vec![
+            mp(0.0, 0.0, 0.0),
+            mp(8_000.0, 0.0, 0.0),
+            mp(8_000.0, 4_000.0, 0.0),
+            mp(4_000.0, 4_000.0, 0.0),
+            mp(4_000.0, 8_000.0, 0.0),
+            mp(0.0, 8_000.0, 0.0),
+        ];
+        // One point in each arm, one in the notch (outside).
+        let m = mesh_of(
+            outline,
+            vec![
+                mp(6_000.0, 2_000.0, 1_000.0),
+                mp(2_000.0, 6_000.0, 1_000.0),
+                mp(6_000.0, 6_000.0, 3_000.0),
+            ],
+        );
+        let (points, triangles) = mesh_triangles(&m);
+        assert_eq!(points.len(), 8, "the notch point is left out");
+        let area: f64 = triangles
+            .iter()
+            .map(|t| crate::polygon_area(&t.map(|i| points[i].at)))
+            .sum();
+        assert!((area - 48_000_000.0).abs() < 1.0, "{area}");
+        assert!(!mesh_contours(&m, 0.0, 500.0).is_empty());
+    }
+
+    fn line(len: f64) -> Vec<Point> {
+        vec![Point::new(0.0, 0.0), Point::new(len, 0.0)]
+    }
+
+    #[test]
+    fn a_stair_of_one_or_two_risers_has_no_or_one_tread() {
+        let one = stair_steps(&stair(line(3_000.0), Some(1)), 0.0, 175.0);
+        assert!(one.treads.is_empty() && one.heights.is_empty());
+        assert!((one.riser - 175.0).abs() < 1e-9);
+        let two = stair_steps(&stair(line(3_000.0), Some(2)), 0.0, 350.0);
+        assert_eq!(two.treads.len(), 1);
+        assert!((two.going - 3_000.0).abs() < 1e-9);
+        assert!((crate::polygon_area(&two.treads[0]) - 3_000.0 * 900.0).abs() < 1e-6);
+        assert!((two.heights[0] - 175.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_duplicated_point_in_the_walking_line_changes_nothing() {
+        let path = vec![
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 0.0),
+            Point::new(3_750.0, 0.0),
+            Point::new(3_750.0, 0.0),
+        ];
+        let steps = stair_steps(&stair(path, None), 0.0, 2_800.0);
+        assert_eq!(steps.treads.len(), 15);
+        for t in &steps.treads {
+            assert!((crate::polygon_area(t) - 250.0 * 900.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn a_u_turn_stair_has_finite_treads() {
+        let path = vec![
+            Point::new(0.0, 0.0),
+            Point::new(2_000.0, 0.0),
+            Point::new(2_000.0, 1_000.0),
+            Point::new(0.0, 1_000.0),
+        ];
+        let steps = stair_steps(&stair(path, Some(9)), 0.0, 1_600.0);
+        assert_eq!(steps.treads.len(), 8);
+        assert!((steps.going - 5_000.0 / 8.0).abs() < 1e-9);
+        for p in steps.treads.iter().flatten() {
+            assert!(p.x > -1_000.0 && p.x < 3_000.0 && p.y > -1_000.0 && p.y < 2_000.0);
+        }
+    }
+
+    #[test]
+    fn a_path_going_back_on_itself_does_not_panic() {
+        let path = vec![
+            Point::new(0.0, 0.0),
+            Point::new(2_000.0, 0.0),
+            Point::new(0.0, 0.0),
+        ];
+        let steps = stair_steps(&stair(path, Some(5)), 0.0, 850.0);
+        assert_eq!(steps.treads.len(), 4);
+        assert!(steps.treads.iter().flatten().all(|p| p.x.is_finite()));
+    }
+
+    #[test]
+    fn a_stair_going_down_shares_the_height_too() {
+        // From 2800 down to 0: 16 risers of -175, as going up.
+        let s = stair(line(3_750.0), None);
+        let steps = stair_steps(&s, 2_800.0, 0.0);
+        assert_eq!(steps.risers, 16, "got {} risers", steps.risers);
+        assert!((steps.riser + 175.0).abs() < 1e-9, "{}", steps.riser);
+        assert_eq!(steps.treads.len(), 15);
+    }
+
+    #[test]
+    fn an_inner_point_on_an_edge_makes_no_flat_triangle() {
+        let m = mesh_of(square(0.0), vec![mp(5_000.0, 0.0, 1_000.0)]);
+        let (points, triangles) = mesh_triangles(&m);
+        for t in &triangles {
+            let area = crate::polygon_area(&t.map(|i| points[i].at));
+            assert!(area > 1.0, "flat triangle {t:?} in {triangles:?}");
+        }
     }
 }
