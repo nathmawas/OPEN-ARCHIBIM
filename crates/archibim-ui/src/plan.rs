@@ -246,7 +246,19 @@ impl PlanView {
         let r = 5.0;
         let mark = Stroke::new(1.5, GUIDE);
         match snap.kind {
-            SnapKind::Free | SnapKind::Direction => {}
+            SnapKind::Free | SnapKind::Direction | SnapKind::Parallel => {}
+            SnapKind::Perpendicular => {
+                // A right-angle mark.
+                let corner = c + Vec2::new(-r, r);
+                painter.add(Shape::line(
+                    vec![c + Vec2::new(-r, -r), corner, c + Vec2::new(r, r)],
+                    mark,
+                ));
+                painter.add(Shape::line(
+                    vec![corner + Vec2::new(0.0, -r), c, corner + Vec2::new(r, 0.0)],
+                    mark,
+                ));
+            }
             SnapKind::Point => {
                 painter.rect_stroke(
                     Rect::from_center_size(c, Vec2::splat(2.0 * r)),
@@ -267,7 +279,7 @@ impl PlanView {
                 painter.line_segment([c + Vec2::splat(-r), c + Vec2::splat(r)], mark);
                 painter.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], mark);
             }
-            SnapKind::Edge | SnapKind::Alignment => {
+            SnapKind::Edge | SnapKind::Alignment | SnapKind::Guide => {
                 painter.line_segment([c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0)], mark);
                 painter.line_segment([c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r)], mark);
             }

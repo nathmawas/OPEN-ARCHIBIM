@@ -20,7 +20,7 @@ use model_view::ModelView;
 use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
-pub use snap::{Scene, Snap, SnapKind, SnapOptions};
+pub use snap::{PICKED_EDGES, Scene, Snap, SnapKind, SnapOptions};
 use wall_tool::rectangle;
 pub use wall_tool::{WallMethod, WallTool};
 
@@ -115,6 +115,8 @@ pub struct Workspace {
     properties: Properties,
     message: Option<String>,
     snap_options: SnapOptions,
+    /// Edges the pointer passed over, most recent first, for guide lines.
+    picked: Vec<(Point, Point)>,
 }
 
 impl Workspace {
@@ -137,6 +139,7 @@ impl Workspace {
             properties: Properties::default(),
             message: None,
             snap_options: SnapOptions::default(),
+            picked: Vec::new(),
         }
     }
 
@@ -215,9 +218,24 @@ impl Workspace {
             (&mut o.edges, "snap.edges"),
             (&mut o.angles, "snap.angles"),
             (&mut o.alignments, "snap.alignments"),
+            (&mut o.guides, "snap.guides"),
         ] {
             ui.checkbox(on, t(key));
         }
+        ui.horizontal(|ui| {
+            ui.label(t("snap.step"));
+            egui::ComboBox::from_id_salt("snap_step")
+                .selected_text(format!("{}°", o.step))
+                .show_ui(ui, |ui| {
+                    for step in [15, 30, 45, 90] {
+                        ui.selectable_value(&mut o.step, step, format!("{step}°"));
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label(t("snap.divisions"));
+            ui.add(egui::DragValue::new(&mut o.divisions).range(2..=12));
+        });
         ui.separator();
         for (layout, key) in [
             (Layout::Plan, "view.plan"),
@@ -309,6 +327,7 @@ impl Workspace {
         self.wall.stop();
         self.slab_points.clear();
         self.beam_start = None;
+        self.picked.clear();
     }
 
     fn run(&mut self, history: &mut History, command: Command) -> bool {
@@ -346,13 +365,17 @@ impl Workspace {
             .copied()
             .collect();
         let snapped = response.hover_pos().map(|p| {
-            Scene::new(history.project(), &drawing).snap(
-                &self.snap_options,
-                self.view.model(p),
-                from,
-                shift,
-                snap,
-            )
+            let p = self.view.model(p);
+            let mut scene = Scene::new(history.project(), &drawing);
+            // The edge under the pointer is picked up for guide lines.
+            if let Some(edge) = scene.edge_near(p, snap)
+                && !self.picked.contains(&edge)
+            {
+                self.picked.insert(0, edge);
+                self.picked.truncate(PICKED_EDGES);
+            }
+            scene.pick(&self.picked);
+            scene.snap(&self.snap_options, p, from, shift, snap)
         });
         let cursor = snapped.as_ref().map(|s| s.point);
         if let Some(p) = cursor {
