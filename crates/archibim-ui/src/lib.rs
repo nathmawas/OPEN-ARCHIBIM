@@ -84,10 +84,10 @@ pub enum Tool {
     Opening,
     /// Draws roof outlines.
     Roof,
-    /// Draws terrain mesh outlines.
-    Mesh,
     /// Draws the walking line of a stair.
     Stair,
+    /// Draws terrain mesh outlines.
+    Mesh,
 }
 
 /// How the clicks of the slab tool make an outline.
@@ -566,6 +566,9 @@ impl Workspace {
     /// Makes the element of the active tool from the outline drawn.
     fn close_outline(&mut self, history: &mut History) -> bool {
         let outline = std::mem::take(&mut self.slab_points);
+        if outline.len() < 3 {
+            return false;
+        }
         let id = history.new_id();
         let command = match self.tool {
             Tool::Roof => {
@@ -592,6 +595,10 @@ impl Workspace {
     }
 
     fn close_stair(&mut self, history: &mut History) -> bool {
+        if self.slab_points.len() < 2 {
+            self.slab_points.clear();
+            return false;
+        }
         let stair = Stair {
             id: history.new_id(),
             path: std::mem::take(&mut self.slab_points),

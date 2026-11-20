@@ -25,4 +25,6 @@ expect:
     stopping behind a parapet). A vertical slope is refused. Undo
     restores the roof.
   - Not yet - L-shaped outlines (hips and valleys of a concave outline),
-    walls trimmed under the roof, gutters, fascias, skylights and dormers.
+    walls trimmed under the roof, layers that each stop at their own limit,
+    an eaves height per edge, gutters, fascias, skylights and dormers.
+    A re-entrant outline is accepted with a warning.

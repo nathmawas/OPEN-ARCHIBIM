@@ -10,6 +10,8 @@ use egui::{Color32, Key, PointerButton, Sense, Ui};
 use crate::plan::{CONCRETE, SELECTED, fill_of};
 
 const BACKGROUND: Color32 = Color32::from_gray(225);
+// ponytail: one colour for every terrain, until materials carry an
+// appearance.
 const TERRAIN: Color32 = Color32::from_rgb(170, 190, 140);
 
 /// The camera and the triangles of the model, rebuilt when it changes.

@@ -21,5 +21,8 @@ expect:
     those above it dashed; the walking line ends with an arrow at the head.
   - Changing the story heights changes the steps, keeping the width and
     the material. Undo restores the stair.
-  - Not yet - winders, curved and helical walking lines, landings, railings
-    and stringers, headroom check, the opening in the slab above.
+  - Not yet - winders, curved and helical walking lines (a centre, a
+    radius and a turn with no limit, not the arc of a wall, which stops at
+    a full circle), a walking line set off the centre on turning stairs,
+    landings, railings and stringers, headroom check, the opening in the
+    slab above, renovation status.

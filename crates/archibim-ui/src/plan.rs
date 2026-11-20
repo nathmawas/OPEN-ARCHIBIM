@@ -17,6 +17,9 @@ const SLAB: Color32 = Color32::from_gray(235);
 /// Fill of terrain meshes in plan.
 const TERRAIN: Color32 = Color32::from_rgb(232, 240, 222);
 /// Contour lines: one every interval, a stronger one every fifth.
+// ponytail: fixed for every terrain; a setting of the terrain or the view,
+// and the fill from the terrain's material, once materials carry an
+// appearance.
 const CONTOUR: f64 = 500.0;
 /// Height of the plan cut above the foot of a stair: treads above it are
 /// dashed.
@@ -215,6 +218,59 @@ impl PlanView {
                 6.0,
                 4.0,
             ));
+            // The slope of each plane, in its middle.
+            for face in roof_faces(roof).iter().filter(|f| f.slope > 0.0) {
+                let n = face.polygon.len() as f64;
+                let c = face.polygon.iter().fold(Point::new(0.0, 0.0), |c, p| {
+                    Point::new(c.x + p.x / n, c.y + p.y / n)
+                });
+                self.label(
+                    painter,
+                    c,
+                    format!("{:.0}°", face.slope.to_degrees()),
+                    s.color,
+                );
+            }
+            if selection == Some(roof.id) {
+                self.numbers(painter, &roof.outline, true);
+            }
+        }
+        for mesh in project.meshes.iter().filter(|m| selection == Some(m.id)) {
+            let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
+            self.numbers(painter, &outline, false);
+        }
+    }
+
+    fn label(&self, painter: &Painter, at: Point, text: String, color: Color32) {
+        painter.text(
+            self.screen(at),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(12.0),
+            color,
+        );
+    }
+
+    /// Numbers from 1 on the edges (their middles) or the corners of an
+    /// outline, as the properties palette lists them.
+    fn numbers(&self, painter: &Painter, outline: &[Point], edges: bool) {
+        let n = outline.len();
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let at = if edges {
+                Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
+            } else {
+                a
+            };
+            let p = self.screen(at);
+            painter.circle_filled(p, 8.0, SELECTED);
+            painter.text(
+                p,
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                egui::FontId::proportional(11.0),
+                Color32::WHITE,
+            );
         }
     }
 

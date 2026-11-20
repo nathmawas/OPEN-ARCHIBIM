@@ -12,6 +12,8 @@ expect:
   - In plan the terrain shows contour lines every 0.5 m, a stronger one
     every 2.5 m; here at 0.5, 1 and 1.5 m around the hill.
   - In 3D the terrain is solid down to its flat underside.
-  - A point added outside the outline is kept but has no effect.
+  - A point added outside the outline is kept but has no effect, with a
+    warning; so is a point below the bottom of the ground.
   - Undo restores the heights.
-  - Not yet - break lines, survey file import, earthworks under buildings.
+  - Not yet - break lines, survey file import, earthworks under buildings,
+    the fill and colour from the terrain's material, renovation status.

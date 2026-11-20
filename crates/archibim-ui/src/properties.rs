@@ -2,7 +2,7 @@
 //! in place. Every change becomes one command when the user lets go.
 
 use archibim_commands::Command;
-use archibim_geometry::stair_steps;
+use archibim_geometry::{contains, stair_steps};
 use archibim_model::{
     Align, Anchor, Beam, Column, Id, Layer, LayerRole, Material, Mesh, MeshPoint, Opening, Point,
     Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall, WallReference,
@@ -243,32 +243,28 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> E
     edit
 }
 
-/// A roof: its build-up, its reference plane and, edge by edge, a slope or
-/// a gable and the overhang.
+/// A roof: edge by edge a slope or a gable and the overhang, then the
+/// eaves level, the plane it gives, and the build-up.
 fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
     ui.label(t("el.roof"));
-    build_up(ui, e, &mut r.layers, materials, "buildup.layers_slab");
-    number(ui, e, "p.eaves_offset", &mut r.eaves.offset, -1.0e6);
-    ui.horizontal(|ui| {
-        for (plane, key) in [
-            (RoofPlane::Top, "roof.plane_top"),
-            (RoofPlane::Bottom, "roof.plane_bottom"),
-        ] {
-            e.track(&ui.selectable_value(&mut r.plane, plane, t(key)));
-        }
-    });
     let numbered = r.edges.len() > 1;
+    ui.label(t(if numbered {
+        "roof.edges_hint"
+    } else {
+        "roof.all_edges"
+    }));
+    // ponytail: a gable given a slope again takes the first sloped edge's;
+    // keep each edge's own once edges remember it.
+    let fallback = r
+        .edges
+        .iter()
+        .find_map(|edge| edge.slope)
+        .unwrap_or(35f64.to_radians());
     for (i, edge) in r.edges.iter_mut().enumerate() {
-        ui.separator();
         if numbered {
+            ui.separator();
             ui.label(format!("{} {}", t("roof.edge"), i + 1));
         }
-        let mut gable = edge.slope.is_none();
-        let g = ui.checkbox(&mut gable, t("roof.gable"));
-        if g.changed() {
-            edge.slope = (!gable).then(|| 35f64.to_radians());
-        }
-        e.track(&g);
         if let Some(slope) = &mut edge.slope {
             ui.horizontal(|ui| {
                 ui.label(t("roof.slope"));
@@ -285,8 +281,48 @@ fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
                 e.track(&s);
             });
         }
-        number(ui, e, "roof.overhang", &mut edge.overhang, 0.0);
+        number(ui, e, "roof.overhang", &mut edge.overhang, -1.0e5);
+        let mut gable = edge.slope.is_none();
+        let g = ui
+            .checkbox(&mut gable, t("roof.gable"))
+            .on_hover_text(t("roof.gable_hint"));
+        if g.changed() {
+            edge.slope = (!gable).then_some(fallback);
+        }
+        e.track(&g);
     }
+    if numbered && ui.button(t("roof.apply_all")).clicked() {
+        let first = r.edges[0];
+        r.edges.iter_mut().for_each(|edge| *edge = first);
+        e.commit = true;
+    }
+    ui.separator();
+    number(ui, e, "p.eaves_offset", &mut r.eaves.offset, -1.0e6);
+    for (plane, key) in [
+        (RoofPlane::Bottom, "roof.plane_bottom"),
+        (RoofPlane::Top, "roof.plane_top"),
+    ] {
+        e.track(&ui.selectable_value(&mut r.plane, plane, t(key)));
+    }
+    // Alert, never refuse.
+    if !convex(&r.outline) {
+        ui.colored_label(ui.visuals().warn_fg_color, t("roof.concave_warning"));
+    }
+    ui.separator();
+    build_up(ui, e, &mut r.layers, materials, "buildup.layers_slab");
+}
+
+/// Whether a closed outline turns the same way at every corner.
+fn convex(outline: &[Point]) -> bool {
+    let n = outline.len();
+    let turns: Vec<f64> = (0..n)
+        .map(|i| {
+            let (a, b, c) = (outline[i], outline[(i + 1) % n], outline[(i + 2) % n]);
+            (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+        })
+        .filter(|t| t.abs() > 1e-6)
+        .collect();
+    turns.iter().all(|t| *t > 0.0) || turns.iter().all(|t| *t < 0.0)
 }
 
 /// A terrain mesh: the height of each point of its outline, the points
@@ -296,6 +332,7 @@ fn mesh(ui: &mut Ui, e: &mut Edit, m: &mut Mesh, materials: &[Material]) {
     material(ui, e, &mut m.material, materials);
     number(ui, e, "p.level_offset", &mut m.level.offset, -1.0e6);
     number(ui, e, "mesh.bottom", &mut m.bottom, -1.0e6);
+    ui.label(t("mesh.points_hint"));
     for (i, p) in m.outline.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             ui.label(format!("{} {}", t("mesh.point"), i + 1));
@@ -335,20 +372,37 @@ fn mesh(ui: &mut Ui, e: &mut Edit, m: &mut Mesh, materials: &[Material]) {
         });
         e.commit = true;
     }
+    // Alerts, never refusals.
+    let outline: Vec<Point> = m.outline.iter().map(|p| p.at).collect();
+    let warn = ui.visuals().warn_fg_color;
+    if m.inner.iter().any(|p| !contains(&outline, p.at)) {
+        ui.colored_label(warn, t("mesh.outside_warning"));
+    }
+    if m.outline.iter().chain(&m.inner).any(|p| p.z < m.bottom) {
+        ui.colored_label(warn, t("mesh.below_warning"));
+    }
 }
 
-/// A stair: width, levels, risers worked out or set, and what they give,
-/// with a warning when the steps are outside the usual comfort.
+/// Usual comfort of a stair (French practice): 2 risers + going, and the
+/// riser height.
+// ponytail: French ranges written here; preset data by country (TOOLS.md,
+// rule 17).
+const BLONDEL: (f64, f64) = (600.0, 640.0);
+const RISER: (f64, f64) = (150.0, 200.0);
+
+/// A stair: width, levels, risers worked out or set, and what they give;
+/// a value outside the usual comfort is shown in the warning colour.
 fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
     ui.label(t("el.stair"));
-    material(ui, e, &mut s.material, &project.materials);
     number(ui, e, "p.width", &mut s.width, 1.0);
     number(ui, e, "p.bottom_offset", &mut s.bottom.offset, -1.0e6);
     number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
+    material(ui, e, &mut s.material, &project.materials);
     let (Ok(bottom), Ok(top)) = (project.level(&s.bottom), project.level(&s.top)) else {
         return;
     };
     let steps = stair_steps(s, bottom, top);
+    ui.separator();
     let mut auto = s.risers.is_none();
     let a = ui.checkbox(&mut auto, t("stair.auto_risers"));
     if a.changed() {
@@ -364,16 +418,21 @@ fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
             }
         }
     });
-    ui.label(format!("{} {:.1} mm", t("stair.riser"), steps.riser));
-    ui.label(format!("{} {:.0} mm", t("stair.going"), steps.going));
-    let blondel = steps.blondel();
-    ui.label(format!("{} {blondel:.0} mm", t("stair.blondel")));
-    // Alert, never refuse.
-    // ponytail: French comfort ranges written here; preset data by country
-    // (TOOLS.md, rule 17).
-    if !(600.0..=640.0).contains(&blondel) || !(150.0..=200.0).contains(&steps.riser) {
-        ui.colored_label(ui.visuals().warn_fg_color, t("stair.comfort_warning"));
-    }
+    let warn = ui.visuals().warn_fg_color;
+    let value = |ui: &mut Ui, key, v: f64, range: Option<(f64, f64)>| {
+        let text = match range {
+            Some((lo, hi)) => format!("{} {v:.0} mm ({lo:.0} – {hi:.0})", t(key)),
+            None => format!("{} {v:.0} mm", t(key)),
+        };
+        if range.is_some_and(|(lo, hi)| !(lo..=hi).contains(&v)) {
+            ui.colored_label(warn, text);
+        } else {
+            ui.label(text);
+        }
+    };
+    value(ui, "stair.riser", steps.riser.abs(), Some(RISER));
+    value(ui, "stair.going", steps.going, None);
+    value(ui, "stair.blondel", steps.blondel(), Some(BLONDEL));
 }
 
 fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material]) {
