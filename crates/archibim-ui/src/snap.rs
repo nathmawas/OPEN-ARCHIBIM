@@ -767,4 +767,220 @@ mod tests {
         let angle = r.point.y.atan2(r.point.x).to_degrees();
         assert!((angle - 15.0).abs() < 1e-6, "{angle}");
     }
+
+    fn pt(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    #[test]
+    fn a_picked_edge_of_zero_length_offers_nothing() {
+        let mut s = scene(&[], &[]);
+        s.pick(&[(pt(100.0, 100.0), pt(100.0, 100.0))]);
+        let o = SnapOptions::default();
+        assert!(s.lines().is_empty(), "no direction, no guide line");
+        for from in [None, Some(pt(0.0, 0.0))] {
+            for shift in [false, true] {
+                let r = s.snap(&o, pt(500.0, 300.0), from, shift, 10.0);
+                assert!(r.point.x.is_finite() && r.point.y.is_finite(), "{r:?}");
+                assert!(!matches!(r.kind, SnapKind::Guide | SnapKind::Parallel));
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_length_edge_is_never_picked_under_the_pointer() {
+        let s = scene(
+            &[],
+            &[((50.0, 50.0), (50.0, 50.0)), ((0.0, 0.0), (1000.0, 0.0))],
+        );
+        assert_eq!(s.edge_near(pt(50.0, 52.0), 10.0), None);
+        let edge = s.edge_near(pt(500.0, 4.0), 10.0);
+        assert_eq!(edge, Some((pt(0.0, 0.0), pt(1000.0, 0.0))));
+        assert_eq!(s.edge_near(pt(500.0, 40.0), 10.0), None);
+    }
+
+    #[test]
+    fn two_parallel_picked_edges_have_no_crossing_of_their_own() {
+        let mut s = scene(&[], &[]);
+        s.pick(&[
+            (pt(0.0, 3000.0), pt(4000.0, 3000.0)),
+            (pt(0.0, 0.0), pt(4000.0, 0.0)),
+        ]);
+        let o = SnapOptions::default();
+        assert!(line_line(pt(0.0, 0.0), pt(1.0, 0.0), pt(0.0, 3000.0), pt(1.0, 0.0)).is_none());
+        // Between them, nothing: the two extensions never meet.
+        let r = s.snap(&o, pt(6000.0, 1500.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // Where an extension meets the other edge's perpendicular, they do.
+        let r = s.snap(&o, pt(4003.0, 2998.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, 4000.0, 3000.0));
+        // The same edge twice does not crash.
+        let e = (pt(0.0, 0.0), pt(4000.0, 0.0));
+        s.pick(&[e, e]);
+        let _ = s.snap(&o, pt(1.0, 1.0), Some(pt(5.0, 5.0)), false, 10.0);
+    }
+
+    #[test]
+    fn a_horizontal_picked_edge_gives_the_angle_direction_not_a_parallel() {
+        let mut s = scene(&[], &[]);
+        s.pick(&[(pt(0.0, 0.0), pt(4000.0, 0.0))]);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(2500.0, 2004.0), Some(pt(0.0, 2000.0)), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Direction, "{r:?}");
+        assert!(close(r.point, 2500.0, 2000.0));
+        // With the angles off, the same direction is a parallel.
+        let no_angles = SnapOptions { angles: false, ..o };
+        let r = s.snap(
+            &no_angles,
+            pt(2500.0, 2004.0),
+            Some(pt(0.0, 2000.0)),
+            false,
+            10.0,
+        );
+        assert_eq!(r.kind, SnapKind::Parallel, "{r:?}");
+        assert!(close(r.point, 2500.0, 2000.0));
+    }
+
+    #[test]
+    fn the_foot_of_the_perpendicular_is_not_offered_from_a_point_on_the_edge() {
+        let mut s = scene(&[], &[]);
+        s.pick(&[(pt(0.0, 0.0), pt(4000.0, 0.0))]);
+        let o = SnapOptions::default();
+        // The start lies on the picked edge's line: its foot is itself.
+        let r = s.snap(&o, pt(6003.0, 2.0), Some(pt(6000.0, 0.0)), false, 10.0);
+        assert_ne!(r.kind, SnapKind::Perpendicular, "{r:?}");
+        let r = s.snap(&o, pt(6002.0, 1.0), Some(pt(6000.0, 0.0)), false, 10.0);
+        assert_ne!(r.kind, SnapKind::Perpendicular, "{r:?}");
+        // From above the edge, on its extension, the foot is offered.
+        let r = s.snap(&o, pt(6003.0, 2.0), Some(pt(6000.0, 2000.0)), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Perpendicular, "{r:?}");
+        assert!(close(r.point, 6000.0, 0.0));
+        // Guides off: no foot.
+        let off = SnapOptions { guides: false, ..o };
+        let r = s.snap(&off, pt(6003.0, 2.0), Some(pt(6000.0, 2000.0)), false, 10.0);
+        assert_ne!(r.kind, SnapKind::Perpendicular, "{r:?}");
+    }
+
+    #[test]
+    fn walls_divide_in_twelve_and_never_in_fewer_than_two() {
+        let mut s = scene(&[], &[]);
+        s.divided.push((pt(0.0, 0.0), pt(1200.0, 0.0)));
+        let twelve = SnapOptions {
+            divisions: 12,
+            ..SnapOptions::default()
+        };
+        for k in 1..12 {
+            let x = f64::from(k) * 100.0;
+            let r = s.snap(&twelve, pt(x + 3.0, 4.0), None, false, 10.0);
+            assert!(
+                close(r.point, x, 0.0) && r.kind == SnapKind::Midpoint,
+                "{k} {r:?}"
+            );
+        }
+        // Zero and one count as two: the middle.
+        for n in [0, 1, 2] {
+            let o = SnapOptions {
+                divisions: n,
+                ..SnapOptions::default()
+            };
+            let r = s.snap(&o, pt(603.0, 4.0), None, false, 10.0);
+            assert!(close(r.point, 600.0, 0.0), "{n} {r:?}");
+        }
+        // The ends are not division points.
+        let r = s.snap(&twelve, pt(2.0, 2.0), None, false, 1.0);
+        assert_eq!(r.kind, SnapKind::Free);
+        // Midpoints off: no division either.
+        let off = SnapOptions {
+            midpoints: false,
+            ..twelve
+        };
+        let r = s.snap(&off, pt(103.0, 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free);
+    }
+
+    #[test]
+    fn the_angle_step_of_90_gives_only_the_axes_and_odd_steps_are_clamped() {
+        let s = scene(&[], &[]);
+        let start = Some(pt(0.0, 0.0));
+        let at = |step| SnapOptions {
+            step,
+            ..SnapOptions::default()
+        };
+        let r = s.snap(&at(90), pt(1000.0, 700.0), start, true, 10.0);
+        assert!(close(r.point, 1000.0, 0.0), "{r:?}");
+        let r = s.snap(&at(90), pt(700.0, 1000.0), start, true, 10.0);
+        assert!(close(r.point, 0.0, 1000.0), "{r:?}");
+        // 45 degrees is no longer a direction at step 90.
+        let r = s.snap(&at(90), pt(1000.0, 1004.0), start, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // A step of 0 does not divide by zero; above 90 acts as 90.
+        for step in [0, 200, u16::MAX] {
+            let r = s.snap(&at(step), pt(1000.0, 300.0), start, true, 10.0);
+            assert!(
+                r.point.x.is_finite() && r.point.y.is_finite(),
+                "{step} {r:?}"
+            );
+        }
+        let r = s.snap(&at(200), pt(1000.0, 700.0), start, true, 10.0);
+        assert!(close(r.point, 1000.0, 0.0), "{r:?}");
+        // Backwards too.
+        let r = s.snap(&at(90), pt(-1000.0, 20.0), start, true, 10.0);
+        assert!(close(r.point, -1000.0, 0.0), "{r:?}");
+    }
+
+    #[test]
+    fn guides_and_angles_are_turned_off_independently() {
+        let s = oblique();
+        let on = SnapOptions::default();
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let start = pt(0.0, 2000.0);
+        let along = pt(start.x + 2500.0 * cos, start.y + 2500.0 * sin + 4.0);
+        let level = pt(2500.0, 2004.0);
+        // Guides off, angles on: the horizontal still locks, the parallel not.
+        let no_guides = SnapOptions {
+            guides: false,
+            ..on
+        };
+        let r = s.snap(&no_guides, level, Some(start), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Direction, "{r:?}");
+        let r = s.snap(&no_guides, along, Some(start), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // Shift then locks the nearest angle, never a picked direction.
+        let r = s.snap(&no_guides, along, Some(start), true, 10.0);
+        assert_eq!(r.kind, SnapKind::Direction, "{r:?}");
+        // Angles off, guides on: the parallel locks, the horizontal not.
+        let no_angles = SnapOptions {
+            angles: false,
+            ..on
+        };
+        let r = s.snap(&no_angles, along, Some(start), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Parallel, "{r:?}");
+        // (Alignments off too: the level would otherwise align with the start.)
+        let bare = SnapOptions {
+            alignments: false,
+            ..no_angles
+        };
+        let r = s.snap(&bare, level, Some(start), false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // Both off, Shift still locks the nearest angle.
+        let neither = SnapOptions {
+            angles: false,
+            guides: false,
+            ..on
+        };
+        let r = s.snap(&neither, pt(1000.0, 300.0), Some(pt(0.0, 0.0)), true, 10.0);
+        assert!(close(r.point, 1000.0, 0.0), "{r:?}");
+    }
+
+    #[test]
+    fn forgetting_the_picked_edges_removes_their_guides() {
+        let mut s = oblique();
+        let o = SnapOptions::default();
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let far = pt(6000.0 * cos - 5.0 * sin, 6000.0 * sin + 5.0 * cos);
+        assert_eq!(s.snap(&o, far, None, false, 10.0).kind, SnapKind::Guide);
+        s.pick(&[]);
+        assert_eq!(s.snap(&o, far, None, false, 10.0).kind, SnapKind::Free);
+    }
 }

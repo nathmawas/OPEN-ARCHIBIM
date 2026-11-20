@@ -251,4 +251,42 @@ mod tests {
         assert!(plan.iter().any(|l| !l.members.is_empty()), "studs shown");
         Ok(())
     }
+
+    #[test]
+    fn the_wall_presets_are_simple_first_then_build_ups_with_known_materials() -> super::Result<()>
+    {
+        let (h, _, templates) = super::house()?;
+        let presets = &templates.wall_presets;
+        assert_eq!(presets.len(), 7);
+        for (i, p) in presets.iter().enumerate() {
+            assert_eq!(p.layers.len() == 1, i < 4, "{}: simple ones first", p.name);
+            assert!(p.name.starts_with("preset.wall."), "{}", p.name);
+            for l in &p.layers {
+                assert!(
+                    h.project().materials.iter().any(|m| m.id == l.material),
+                    "{}: unknown material",
+                    p.name
+                );
+            }
+        }
+        let total = |i: usize| presets[i].layers.iter().map(|l| l.thickness).sum::<f64>();
+        assert_eq!(
+            [total(0), total(1), total(2), total(3)],
+            [200.0, 200.0, 200.0, 72.0]
+        );
+        // Matching by layers must be unambiguous: no two presets are equal.
+        for (i, a) in presets.iter().enumerate() {
+            for b in &presets[i + 1..] {
+                assert_ne!(a.layers, b.layers, "{} and {}", a.name, b.name);
+            }
+        }
+        // The names of the starting library are language pack keys.
+        assert!(
+            h.project()
+                .materials
+                .iter()
+                .all(|m| m.name.starts_with("mat."))
+        );
+        Ok(())
+    }
 }

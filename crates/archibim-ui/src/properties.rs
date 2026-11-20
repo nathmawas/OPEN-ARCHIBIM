@@ -453,4 +453,70 @@ mod tests {
         ];
         assert_eq!(simplified(&lining).material, Id(2), "else the thickest");
     }
+
+    #[test]
+    fn a_one_layer_build_up_made_simple_is_unchanged() {
+        let one = [layer(LayerRole::Finish, 7, 90.0)];
+        let simple = simplified(&one);
+        assert_eq!(simple.thickness, 90.0);
+        assert_eq!(simple.material, Id(7));
+        assert_eq!(simple.role, LayerRole::LoadBearing, "a simple wall bears");
+    }
+
+    #[test]
+    fn a_build_up_with_no_load_bearing_layer_takes_its_thickest() {
+        let l = [
+            layer(LayerRole::Finish, 1, 13.0),
+            layer(LayerRole::Insulation, 2, 100.0),
+            layer(LayerRole::Lining, 3, 13.0),
+        ];
+        let one = simplified(&l);
+        assert_eq!((one.material, one.thickness), (Id(2), 126.0));
+        // A tie keeps one of the thickest, whichever; the total holds.
+        let tie = [
+            layer(LayerRole::Finish, 1, 50.0),
+            layer(LayerRole::Insulation, 2, 50.0),
+        ];
+        let one = simplified(&tie);
+        assert!([Id(1), Id(2)].contains(&one.material));
+        assert_eq!(one.thickness, 100.0);
+    }
+
+    #[test]
+    fn the_first_load_bearing_layer_wins_even_when_thinner() {
+        let l = [
+            layer(LayerRole::LoadBearing, 1, 20.0),
+            layer(LayerRole::Insulation, 2, 300.0),
+            layer(LayerRole::LoadBearing, 3, 200.0),
+        ];
+        assert_eq!(simplified(&l).material, Id(1));
+    }
+
+    #[test]
+    fn making_simple_drops_the_framing_and_keeps_the_main_status() {
+        let framing = archibim_model::Framing {
+            material: Id(9),
+            width: 45.0,
+            spacing: 600.0,
+        };
+        let mut bearing = layer(LayerRole::LoadBearing, 3, 140.0);
+        bearing.framing = Some(framing);
+        bearing.status = RenovationStatus::Existing;
+        let l = [layer(LayerRole::Finish, 1, 12.0), bearing];
+        let one = simplified(&l);
+        assert_eq!(one.framing, None, "the members go with the layers");
+        assert_eq!(one.thickness, 152.0);
+        assert_eq!(
+            one.status,
+            RenovationStatus::Existing,
+            "from the main layer"
+        );
+    }
+
+    #[test]
+    fn an_empty_build_up_gives_a_zero_layer_without_panicking() {
+        let one = simplified(&[]);
+        assert_eq!(one.thickness, 0.0);
+        assert_eq!(one.role, LayerRole::LoadBearing);
+    }
 }
