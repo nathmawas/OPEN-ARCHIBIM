@@ -193,6 +193,11 @@ impl Scene {
         self.picked = edges.to_vec();
     }
 
+    /// Whether the edge from `a` to `b` is still in the scene.
+    pub fn has_edge(&self, edge: (Point, Point)) -> bool {
+        self.segments.contains(&edge)
+    }
+
     /// The edge under the pointer, to pick up.
     pub fn edge_near(&self, p: Point, tolerance: f64) -> Option<(Point, Point)> {
         self.on_edge(p, tolerance).map(|(_, edge)| edge)
@@ -381,6 +386,8 @@ impl Scene {
     /// On the ray from `start` along `u`, near the distance `t`: a point on
     /// the ray, an edge or a guide line it crosses, or a point it aligns
     /// with.
+    // ponytail: eight plain arguments; group them in a ray struct if the
+    // ray gains more.
     #[allow(clippy::too_many_arguments)]
     fn along(
         &self,

@@ -374,6 +374,8 @@ impl Workspace {
                 self.picked.insert(0, edge);
                 self.picked.truncate(PICKED_EDGES);
             }
+            // Edges undone, deleted or moved give no guides any more.
+            self.picked.retain(|e| scene.has_edge(*e));
             scene.pick(&self.picked);
             scene.snap(&self.snap_options, p, from, shift, snap)
         });

@@ -164,7 +164,7 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material])
     match element {
         Element::Wall(w) => {
             ui.label(t("el.wall"));
-            build_up(ui, e, &mut w.layers, materials);
+            build_up(ui, e, &mut w.layers, materials, "buildup.layers");
             number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
             ui.label(t("settings.reference"));
@@ -181,7 +181,7 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material])
         }
         Element::Slab(s) => {
             ui.label(t("el.slab"));
-            build_up(ui, e, &mut s.layers, materials);
+            build_up(ui, e, &mut s.layers, materials, "buildup.layers_slab");
             number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
         }
         Element::Column(c) => {
@@ -223,13 +223,15 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, materials: &[Material])
 /// The layers of a wall or a slab. One layer is a simple element, shown
 /// as its material and thickness; several make a build-up, each layer with
 /// its role, listed from the left face (the top of a slab).
-fn build_up(ui: &mut Ui, e: &mut Edit, layers: &mut Vec<Layer>, materials: &[Material]) {
+fn build_up(
+    ui: &mut Ui,
+    e: &mut Edit,
+    layers: &mut Vec<Layer>,
+    materials: &[Material],
+    title: &'static str,
+) {
     let simple = layers.len() == 1;
-    ui.label(t(if simple {
-        "buildup.simple"
-    } else {
-        "buildup.layers"
-    }));
+    ui.label(t(if simple { "buildup.simple" } else { title }));
     let (mut remove, mut raise) = (None, None);
     for (i, layer) in layers.iter_mut().enumerate() {
         ui.horizontal(|ui| {
@@ -316,6 +318,11 @@ fn build_up(ui: &mut Ui, e: &mut Edit, layers: &mut Vec<Layer>, materials: &[Mat
             e.commit = true;
         }
     });
+    // Alert, never refuse: removing or merging layers that are already
+    // built loses their renovation status.
+    if !simple && layers.iter().any(|l| l.status != RenovationStatus::New) {
+        ui.colored_label(ui.visuals().warn_fg_color, t("buildup.renovation_warning"));
+    }
 }
 
 /// One layer standing for a whole build-up: its total thickness, in the

@@ -28,6 +28,9 @@ pub fn house() -> Result<(History, Id, Templates)> {
     }
     // Names are language pack keys: the starting library shows in the
     // user's language; names the user types show as typed.
+    // ponytail: translated in the interface language; follow the project's
+    // language and country once projects carry them, and write the
+    // translated name to IFC.
     let mut material = |name: &str, priority| -> Result<Id> {
         let id = h.new_id();
         h.run(Command::AddMaterial(Material {
@@ -124,6 +127,8 @@ pub fn house() -> Result<(History, Id, Templates)> {
         name,
         layers: layers.clone(),
     };
+    // ponytail: presets written here for the demo; load them as data, by
+    // country and reviewed by architects (TOOLS.md, rule 17).
     let wall_presets = vec![
         preset("preset.wall.concrete", &simple(concrete, 200.0)),
         preset("preset.wall.block", &simple(block, 200.0)),
