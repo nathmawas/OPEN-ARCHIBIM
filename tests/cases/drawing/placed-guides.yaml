@@ -33,15 +33,18 @@ expect:
     a story from the interface will remove its guides first, in the same
     undo step.
   - Guides are never in the 3D view, in quantities or on a print.
-  - Reference point - the key B, or its button in the drawing aids, then a
-    click on a point, marks it with a cross. Typed length and angle then
-    measure from it (the angle from the x axis), shown with a dashed line
-    to the pointer; a click or Enter places the point, and the reference
+  - Reference point - before the first point, the pointer resting for a
+    moment (0.4 s) on an end, a corner, a middle or a crossing makes it the
+    reference, marked with a cross; resting on another point moves it.
+    At any time, even while drawing, the key B or its button in the
+    drawing aids, then a click on a point, forces the reference. Typed
+    length and angle then measure from it, the angle from the x axis, and
+    not along the guide or edge the pointer is on; a dashed line runs from
+    it to the pointer; a click or Enter places the point, and the reference
     is forgotten. A wall being drawn still runs from its own last point.
     The status bar says what to do; Escape cancels it after clearing what
     was typed.
-  - Not yet - a horizontal or vertical guide placed in one gesture
-    (T-square), a length carried over from one place to another with the
-    compass, a guide through a point at an angle to a picked edge, a
-    bisector, guides of other stories shown apart, a count of guides in
-    the status bar, saving guides in the IFC file.
+  - Not yet - a length carried over from one place to another, a guide
+    through a point at an angle to a picked edge, a bisector, guides of
+    other stories shown apart, a count of guides in the status bar,
+    saving guides in the IFC file.

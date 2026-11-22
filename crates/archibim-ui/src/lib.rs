@@ -25,10 +25,14 @@ use model_view::ModelView;
 use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
-pub use snap::{PICKED_EDGES, Scene, Snap, SnapKind, SnapOptions};
+pub use snap::{BASE_ANGLES, PICKED_EDGES, Scene, Snap, SnapKind, SnapOptions};
 use typed::Typed;
 use wall_tool::rectangle;
 pub use wall_tool::{WallMethod, WallTool};
+
+/// How long the pointer rests on a point, before the first one is placed,
+/// for that point to become the reference, in seconds.
+const REST: f64 = 0.4;
 
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
@@ -166,6 +170,10 @@ pub struct Workspace {
     /// Measuring the next point from a reference point: `None` inside
     /// until the reference is clicked.
     reference: Option<Option<Point>>,
+    /// The reference was taken by resting on it, not asked for with B.
+    reference_auto: bool,
+    /// The point the pointer rests on, and since when.
+    resting: Option<(Point, f64)>,
 }
 
 impl Workspace {
@@ -195,6 +203,8 @@ impl Workspace {
             guide_edge: None,
             show_guides: true,
             reference: None,
+            reference_auto: false,
+            resting: None,
         }
     }
 
@@ -359,15 +369,17 @@ impl Workspace {
         ] {
             ui.checkbox(on, t(key));
         }
-        ui.horizontal(|ui| {
-            ui.label(t("snap.step"));
-            egui::ComboBox::from_id_salt("snap_step")
-                .selected_text(format!("{}°", o.step))
-                .show_ui(ui, |ui| {
-                    for step in [15, 30, 45, 90] {
-                        ui.selectable_value(&mut o.step, step, format!("{step}°"));
-                    }
-                });
+        ui.label(t("snap.step"));
+        ui.horizontal_wrapped(|ui| {
+            for (on, angle) in o.base_angles.iter_mut().zip(BASE_ANGLES) {
+                ui.toggle_value(on, format!("{angle}°"));
+            }
+            ui.label(t("snap.other"));
+            ui.add(
+                egui::DragValue::new(&mut o.other_angle)
+                    .range(0..=180)
+                    .suffix("°"),
+            );
         });
         ui.horizontal(|ui| {
             ui.label(t("snap.divisions"));
@@ -388,10 +400,7 @@ impl Workspace {
                 .selectable_label(self.reference.is_some(), t("snap.reference"))
                 .clicked()
         {
-            self.reference = match self.reference {
-                Some(_) => None,
-                None => Some(None),
-            };
+            self.ask_reference();
         }
         ui.separator();
         for (layout, key) in [
@@ -530,6 +539,42 @@ impl Workspace {
         self.reference = None;
     }
 
+    /// B or its button: the next click picks the reference point, or, if
+    /// one was asked for already, no reference.
+    fn ask_reference(&mut self) {
+        self.reference = asked_reference(self.reference, self.reference_auto);
+        self.reference_auto = false;
+    }
+
+    /// Before the first point, the point the pointer rests on for a
+    /// moment becomes the reference, unless one was asked for with B.
+    fn rest(&mut self, ui: &Ui, on: Option<&Snap>, drawing: bool) {
+        let now = ui.input(|i| i.time);
+        let point = on
+            .filter(|s| {
+                matches!(
+                    s.kind,
+                    SnapKind::Point | SnapKind::Midpoint | SnapKind::Intersection
+                )
+            })
+            .map(|s| s.point);
+        let free = self.reference.is_none() || self.reference_auto;
+        match (point, self.resting) {
+            (Some(p), Some((q, since))) if p == q => {
+                if !drawing && free && now - since >= REST && self.tool != Tool::Select {
+                    self.reference = Some(Some(p));
+                    self.reference_auto = true;
+                }
+            }
+            (Some(p), _) => {
+                self.resting = Some((p, now));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(REST));
+            }
+            (None, _) => self.resting = None,
+        }
+    }
+
     fn run(&mut self, history: &mut History, command: Command) -> bool {
         match history.run(command) {
             Ok(_) => {
@@ -569,6 +614,7 @@ impl Workspace {
             [.., a, b] if !arc => (b.y - a.y).atan2(b.x - a.x).to_degrees(),
             _ => 0.0,
         };
+        let drawing_started = from.is_some();
         // Measuring from a reference point: typed values start from it.
         let (from, base) = match self.reference {
             Some(Some(r)) => (Some(r), 0.0),
@@ -605,6 +651,7 @@ impl Workspace {
             scene.pick(&self.picked);
             scene.snap(&self.snap_options, p, from, shift, snap)
         });
+        self.rest(ui, snapped.as_ref(), drawing_started);
         // Where the next point goes: what was typed, or the snapped pointer.
         let cursor = snapped
             .as_ref()
@@ -975,10 +1022,7 @@ impl Workspace {
                                 None => Some(Vec::new()),
                             };
                         } else if c.eq_ignore_ascii_case(&'b') {
-                            self.reference = match self.reference {
-                                Some(_) => None,
-                                None => Some(None),
-                            };
+                            self.ask_reference();
                         } else {
                             self.typed.type_char(c, from.is_some());
                         }
@@ -1025,6 +1069,15 @@ impl Workspace {
             }
         }
         changed
+    }
+}
+
+/// The reference after B: a reference to pick, or none if one was asked
+/// for already; one taken by resting (`auto`) gives way to a new pick.
+fn asked_reference(current: Option<Option<Point>>, auto: bool) -> Option<Option<Point>> {
+    match current {
+        Some(_) if !auto => None,
+        _ => Some(None),
     }
 }
 
@@ -1163,6 +1216,20 @@ fn wall_at(project: &Project, plan: &[LayerPlan], p: Point) -> Option<(Id, f64, 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn b_asks_for_a_reference_or_drops_the_one_asked_for() {
+        use super::asked_reference;
+        let p = Some(archibim_model::Point::new(1.0, 2.0));
+        assert_eq!(asked_reference(None, false), Some(None), "B with none");
+        assert_eq!(
+            asked_reference(Some(p), true),
+            Some(None),
+            "B after resting"
+        );
+        assert_eq!(asked_reference(Some(None), false), None, "B twice");
+        assert_eq!(asked_reference(Some(p), false), None, "B after picking");
+    }
+
     use super::*;
     use archibim_model::Story;
 

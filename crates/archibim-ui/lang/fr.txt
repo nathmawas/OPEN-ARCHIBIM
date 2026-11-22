@@ -93,7 +93,7 @@ mat.osb = OSB
 mat.plasterboard = Plaque de plâtre
 mat.concrete_block = Parpaing
 snap.guides = Guides, perpendiculaires, tangentes
-snap.step = Pas d'angle
+snap.step = Angles accrochés, et leurs multiples (+ sens anti-horaire, - sens horaire)
 snap.divisions = Divisions
 buildup.layers_slab = Complexe, depuis le dessus
 buildup.renovation_warning = Des couches sont existantes ou à démolir : les retirer ou les fusionner leur fait perdre leur état.
@@ -153,3 +153,4 @@ reference.second = Repère : tapez la distance et l'angle depuis le repère (0 =
 guide.line = Ligne guide : cliquez deux points par où elle passe, ou tapez une longueur et un angle.
 guide.circle = Cercle guide : cliquez le centre, puis un point du cercle ou tapez le rayon.
 guide.placed = Guides posés
+snap.other = Autre (0 : aucun)

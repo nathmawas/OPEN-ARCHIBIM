@@ -93,7 +93,7 @@ mat.osb = OSB
 mat.plasterboard = Plasterboard
 mat.concrete_block = Concrete block
 snap.guides = Guides, perpendiculars, tangents
-snap.step = Angle step
+snap.step = Snapped angles, and their multiples (+ anticlockwise, - clockwise)
 snap.divisions = Divisions
 buildup.layers_slab = Build-up, from the top
 buildup.renovation_warning = Some layers are existing or to demolish: removing or merging them loses their status.
@@ -153,3 +153,4 @@ reference.second = Reference: type the distance and angle from it (0 = right, 90
 guide.line = Guide line: click two points it goes through, or type a length and an angle.
 guide.circle = Guide circle: click the centre, then a point on the circle or type the radius.
 guide.placed = Placed guides
+snap.other = Other (0: none)

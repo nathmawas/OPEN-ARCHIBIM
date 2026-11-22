@@ -18,6 +18,10 @@
 use archibim_geometry::{beam_outline, column_outline};
 use archibim_model::{GuideShape, Point, Project};
 
+/// The angles offered in the drawing aids, in degrees: the pointer snaps
+/// to the multiples of those chosen.
+pub const BASE_ANGLES: [u16; 5] = [15, 30, 45, 60, 90];
+
 /// How many edges stay picked up.
 pub const PICKED_EDGES: usize = 2;
 
@@ -32,7 +36,7 @@ pub struct SnapOptions {
     pub intersections: bool,
     /// Anywhere on a face or an edge.
     pub edges: bool,
-    /// Directions every `step` degrees from the last point.
+    /// Directions at the chosen angles from the last point.
     pub angles: bool,
     /// Horizontal and vertical alignments with nearby points, and along
     /// the current direction.
@@ -40,11 +44,36 @@ pub struct SnapOptions {
     /// Guide lines, parallels and perpendiculars from picked-up edges, and
     /// tangents and perpendiculars to arcs.
     pub guides: bool,
-    /// The angle step, in degrees: 15, 30, 45 or 90.
-    pub step: u16,
+    /// Which of `BASE_ANGLES` the directions follow, with their multiples.
+    pub base_angles: [bool; 5],
+    /// One more angle of the architect's choice, in whole degrees from 1
+    /// to 180; 0 for none.
+    // ponytail: whole degrees; take tenths if an architect asks for 22.5.
+    pub other_angle: u16,
     /// Into how many equal parts edges and arcs are divided: 2 gives their
     /// middles.
     pub divisions: u8,
+}
+
+impl SnapOptions {
+    /// The chosen angles, in degrees; the axes alone if none is chosen.
+    pub fn steps(&self) -> Vec<f64> {
+        let mut steps: Vec<f64> = BASE_ANGLES
+            .iter()
+            .zip(self.base_angles)
+            .filter(|(_, on)| *on)
+            .map(|(a, _)| f64::from(*a))
+            .chain(
+                (1..=180)
+                    .contains(&self.other_angle)
+                    .then(|| f64::from(self.other_angle)),
+            )
+            .collect();
+        if steps.is_empty() {
+            steps.push(90.0);
+        }
+        steps
+    }
 }
 
 impl Default for SnapOptions {
@@ -57,7 +86,8 @@ impl Default for SnapOptions {
             angles: true,
             alignments: true,
             guides: true,
-            step: 45,
+            base_angles: [false, true, true, true, true],
+            other_angle: 0,
             divisions: 2,
         }
     }
@@ -582,9 +612,11 @@ impl Scene {
             }
         };
         if shift || options.angles {
-            let step = f64::from(options.step.clamp(1, 90)).to_radians();
-            let angle = (v.y.atan2(v.x) / step).round() * step;
-            consider(Point::new(angle.cos(), angle.sin()), SnapKind::Direction);
+            for step in options.steps() {
+                let step = step.to_radians();
+                let angle = (v.y.atan2(v.x) / step).round() * step;
+                consider(Point::new(angle.cos(), angle.sin()), SnapKind::Direction);
+            }
         }
         if options.guides {
             for l in self.lines().iter().chain(&self.placed) {
@@ -862,6 +894,14 @@ mod tests {
         }
     }
 
+    /// Every option on, directions every 45 degrees only.
+    fn forty_five() -> SnapOptions {
+        SnapOptions {
+            base_angles: [false, false, true, false, false],
+            ..SnapOptions::default()
+        }
+    }
+
     fn close(a: Point, x: f64, y: f64) -> bool {
         (a.x - x).abs() < 1e-6 && (a.y - y).abs() < 1e-6
     }
@@ -869,7 +909,7 @@ mod tests {
     #[test]
     fn shift_locks_the_nearest_45_degrees() {
         let s = scene(&[], &[]);
-        let o = SnapOptions::default();
+        let o = forty_five();
         let start = Some(Point::new(0.0, 0.0));
         let r = s.snap(&o, Point::new(1000.0, 300.0), start, true, 10.0);
         assert!(close(r.point, 1000.0, 0.0), "{r:?}");
@@ -978,7 +1018,7 @@ mod tests {
     #[test]
     fn a_wall_drawn_from_elsewhere_runs_parallel_or_stops_square() {
         let s = oblique();
-        let o = SnapOptions::default();
+        let o = forty_five();
         let (sin, cos) = 30f64.to_radians().sin_cos();
         let start = Point::new(0.0, 2000.0);
         // Nearly parallel to the picked edge: locked parallel.
@@ -1026,7 +1066,10 @@ mod tests {
             close(r.point, 1000.0, 0.0) && r.kind == SnapKind::Midpoint,
             "{r:?}"
         );
-        let fifteen = SnapOptions { step: 15, ..o };
+        let fifteen = SnapOptions {
+            base_angles: [true, false, false, false, false],
+            ..o
+        };
         let r = s.snap(
             &fifteen,
             Point::new(1000.0, 280.0),
@@ -1170,11 +1213,13 @@ mod tests {
     }
 
     #[test]
-    fn the_angle_step_of_90_gives_only_the_axes_and_odd_steps_are_clamped() {
+    fn the_angle_of_90_gives_only_the_axes_and_odd_angles_are_ignored() {
         let s = scene(&[], &[]);
         let start = Some(pt(0.0, 0.0));
-        let at = |step| SnapOptions {
-            step,
+        // 90 alone, or nothing chosen, or an other angle out of range.
+        let at = |other_angle| SnapOptions {
+            base_angles: [false, false, false, false, other_angle == 90],
+            other_angle,
             ..SnapOptions::default()
         };
         let r = s.snap(&at(90), pt(1000.0, 700.0), start, true, 10.0);
@@ -1184,7 +1229,7 @@ mod tests {
         // 45 degrees is no longer a direction at step 90.
         let r = s.snap(&at(90), pt(1000.0, 1004.0), start, false, 10.0);
         assert_eq!(r.kind, SnapKind::Free, "{r:?}");
-        // A step of 0 does not divide by zero; above 90 acts as 90.
+        // Nothing chosen, or an other angle out of range, gives the axes.
         for step in [0, 200, u16::MAX] {
             let r = s.snap(&at(step), pt(1000.0, 300.0), start, true, 10.0);
             assert!(
@@ -1194,6 +1239,44 @@ mod tests {
         }
         let r = s.snap(&at(200), pt(1000.0, 700.0), start, true, 10.0);
         assert!(close(r.point, 1000.0, 0.0), "{r:?}");
+        // The default angles: 30, 45, 60 and 90 and their multiples, 135
+        // and 150 included, 15 not.
+        let d = SnapOptions::default();
+        for (deg, snaps) in [
+            (30.0, true),
+            (45.0, true),
+            (60.0, true),
+            (135.0, true),
+            (150.0, true),
+            (15.0, false),
+            (-45.0, true),
+        ] {
+            let a: f64 = f64::to_radians(deg);
+            let r = s.snap(
+                &d,
+                pt(2000.0 * a.cos(), 2000.0 * a.sin()),
+                start,
+                false,
+                10.0,
+            );
+            assert_eq!(r.kind == SnapKind::Direction, snaps, "{deg} {r:?}");
+        }
+        // An other angle of the architect's choice: 36 and 72.
+        let o = SnapOptions {
+            base_angles: [false; 5],
+            other_angle: 36,
+            ..d
+        };
+        let a = 72f64.to_radians();
+        let r = s.snap(
+            &o,
+            pt(2000.0 * a.cos() + 5.0, 2000.0 * a.sin()),
+            start,
+            true,
+            10.0,
+        );
+        let got = r.point.y.atan2(r.point.x).to_degrees();
+        assert!((got - 72.0).abs() < 1e-6, "{got}");
         // Backwards too.
         let r = s.snap(&at(90), pt(-1000.0, 20.0), start, true, 10.0);
         assert!(close(r.point, -1000.0, 0.0), "{r:?}");
@@ -1202,7 +1285,7 @@ mod tests {
     #[test]
     fn guides_and_angles_are_turned_off_independently() {
         let s = oblique();
-        let on = SnapOptions::default();
+        let on = forty_five();
         let (sin, cos) = 30f64.to_radians().sin_cos();
         let start = pt(0.0, 2000.0);
         let along = pt(start.x + 2500.0 * cos, start.y + 2500.0 * sin + 4.0);
@@ -1275,7 +1358,7 @@ mod tests {
     fn drawing_instruments() {
         let half = std::f64::consts::FRAC_PI_2;
         let s = quarter(half);
-        let o = SnapOptions::default();
+        let o = forty_five();
         let k = 3000.0 * std::f64::consts::FRAC_1_SQRT_2;
         // On the arc, and its middle.
         let r = s.snap(&o, pt(2700.0, 1310.0), None, false, 10.0);
@@ -1915,7 +1998,7 @@ mod tests {
     #[test]
     fn shift_still_locks_the_angle_with_a_placed_line() {
         let s = placed(&[line_guide((0.0, 0.0), (1000.0, 1000.0))]);
-        let o = SnapOptions::default();
+        let o = forty_five();
         let r = s.snap(&o, pt(1000.0, 300.0), Some(pt(0.0, 0.0)), true, 10.0);
         assert!(close(r.point, 1000.0, 0.0), "{r:?}");
         let r = s.snap(&o, pt(1000.0, 990.0), Some(pt(0.0, 5.0)), true, 10.0);

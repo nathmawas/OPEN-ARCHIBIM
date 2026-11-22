@@ -27,6 +27,10 @@ struct Shot {
     tool: Tool,
     clicks: Vec<Point>,
     hover: Option<Point>,
+    /// A point the pointer rests on for a moment before the clicks.
+    rest: Option<Point>,
+    /// Keys typed after the pointer is in place.
+    typed: &'static str,
 }
 
 impl Shot {
@@ -38,6 +42,8 @@ impl Shot {
             tool: Tool::Select,
             clicks: Vec::new(),
             hover: None,
+            rest: None,
+            typed: "",
         }
     }
 }
@@ -98,6 +104,16 @@ impl Capture {
                 hover: Some(Point::new(10870.0, -9470.0)),
                 ..Shot::new("07-guides", None, Layout::Plan)
             },
+            // Resting on the south-east corner of the house makes it the
+            // reference; 2000 typed with the pointer to the south-west
+            // gives the point 2000 from that corner.
+            Shot {
+                tool: Tool::Wall,
+                rest: Some(Point::new(10000.0, -8000.0)),
+                hover: Some(Point::new(8000.0, -9800.0)),
+                typed: "2000",
+                ..Shot::new("08-reference", None, Layout::Plan)
+            },
         ];
         Self {
             dir,
@@ -143,6 +159,12 @@ impl Capture {
                 pressed,
                 modifiers: egui::Modifiers::NONE,
             };
+            if let Some(p) = shot.rest {
+                self.script
+                    .push_back(vec![Event::PointerMoved(workspace.screen_of(p))]);
+                // Sixty empty frames of 10 ms each, so the rest counts.
+                self.script.extend((0..60).map(|_| Vec::new()));
+            }
             for &p in &shot.clicks {
                 let pos = workspace.screen_of(p);
                 self.script
@@ -153,8 +175,15 @@ impl Capture {
                 self.script
                     .push_back(vec![Event::PointerMoved(workspace.screen_of(p))]);
             }
+            if !shot.typed.is_empty() {
+                self.script
+                    .push_back(vec![Event::Text(shot.typed.to_owned())]);
+            }
         }
         if let Some(events) = self.script.pop_front() {
+            if events.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
             raw.events.extend(events);
         }
     }

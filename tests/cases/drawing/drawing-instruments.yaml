@@ -28,6 +28,10 @@ expect:
     90 turns left, -90 turns right; the first segment turns from the x
     axis. A typed value holds while the other follows the pointer; a
     click, or Enter, places the point.
+  - Directions snap to the angles chosen in the drawing aids and their
+    multiples - 30, 45, 60 and 90 by default, 15 on demand, and one more
+    angle of the architect's choice; with none chosen, the axes.
+    Positive angles turn anticlockwise, negative ones clockwise.
   - Enter with nothing typed still closes an outline or ends a stair.
   - Before the first point, with the pointer on the extension of a picked
     edge, on an edge, or lined up with one point, a typed length places the
