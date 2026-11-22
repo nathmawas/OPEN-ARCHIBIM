@@ -132,6 +132,20 @@ pub fn house() -> Result<(History, Id, Templates)> {
     }
 
     let simple = |material, thickness| vec![layer(LayerRole::LoadBearing, material, thickness)];
+    // A low curved garden wall south of the house, bowing away from it.
+    let id = h.new_id();
+    h.run(Command::AddWall(Wall {
+        id,
+        story: ground,
+        start: Point::new(0.0, -11000.0),
+        end: Point::new(10000.0, -11000.0),
+        reference: WallReference::LeftFace,
+        offset: 0.0,
+        sweep: 60f64.to_radians(),
+        layers: simple(concrete, 200.0),
+        bottom: level(ground, 0.0),
+        top: level(ground, 1000.0),
+    }))?;
     let preset = |name, layers: &Vec<Layer>| Preset {
         name,
         layers: layers.clone(),

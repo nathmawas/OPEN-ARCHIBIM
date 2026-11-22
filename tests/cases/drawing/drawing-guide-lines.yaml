@@ -17,7 +17,7 @@ expect:
     locks onto that direction, with or without Shift.
   - Near the foot of the perpendicular from the last point on the face, or
     on its extension, the pointer snaps to it, shown by a right-angle mark.
-  - Walls and slab edges can be divided in 2 to 12 equal parts, and angles
-    snap every 15, 30, 45 or 90 degrees.
+  - Every straight edge and arc can be divided in 2 to 12 equal parts, and
+    angles snap every 15, 30, 45 or 90 degrees.
   - Every one of these aids can be turned off; Escape forgets the picked
     edges.

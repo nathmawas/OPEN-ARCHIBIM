@@ -3,25 +3,43 @@
 //! saves one picture per shot as PNG, and closes.
 
 use std::{
+    collections::VecDeque,
     fs::File,
     io::BufWriter,
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender, channel},
 };
 
-use archibim_model::{Id, Project};
-use archibim_ui::{Layout, Workspace};
-use eframe::egui::{self, ColorImage};
+use archibim_model::{Id, Point, Project};
+use archibim_ui::{Layout, Tool, Workspace};
+use eframe::egui::{self, ColorImage, Event, PointerButton, RawInput};
 
-/// Frames drawn before each picture, so the views are fitted and the 3D
-/// scene is built.
-const SETTLE: u32 = 10;
+/// Frames drawn before each picture, so the views are fitted, the pointer
+/// has moved and the 3D scene is built.
+const SETTLE: u32 = 16;
 
-/// One picture: what is selected and what the window shows.
+/// One picture: what is selected and what the window shows, and for a
+/// drawing tool the points clicked and where the pointer then rests.
 struct Shot {
     name: &'static str,
     selection: Option<Id>,
     layout: Layout,
+    tool: Tool,
+    clicks: Vec<Point>,
+    hover: Option<Point>,
+}
+
+impl Shot {
+    fn new(name: &'static str, selection: Option<Id>, layout: Layout) -> Self {
+        Self {
+            name,
+            selection,
+            layout,
+            tool: Tool::Select,
+            clicks: Vec::new(),
+            hover: None,
+        }
+    }
 }
 
 /// Whether a picture was written, or why not.
@@ -35,6 +53,9 @@ pub struct Capture {
     wait: u32,
     saved: (Sender<Saved>, Receiver<Saved>),
     pending: bool,
+    /// Pointer events still to send, one frame each.
+    script: VecDeque<Vec<Event>>,
+    scripted: bool,
 }
 
 impl Capture {
@@ -44,31 +65,31 @@ impl Capture {
     pub fn new(dir: PathBuf, project: &Project) -> Self {
         let first = |ids: Vec<Id>| ids.first().copied();
         let shots = vec![
+            Shot::new("01-plan-3d", None, Layout::Both),
+            Shot::new(
+                "02-roof",
+                first(project.roofs.iter().map(|e| e.id).collect()),
+                Layout::Both,
+            ),
+            Shot::new(
+                "03-stair",
+                first(project.stairs.iter().map(|e| e.id).collect()),
+                Layout::Both,
+            ),
+            Shot::new(
+                "04-terrain",
+                first(project.meshes.iter().map(|e| e.id).collect()),
+                Layout::Both,
+            ),
+            // A wall started south-east of the garden wall, the pointer
+            // near the point where a line from it touches the curve.
             Shot {
-                name: "01-plan-3d",
-                selection: None,
-                layout: Layout::Both,
+                tool: Tool::Wall,
+                clicks: vec![Point::new(12000.0, -13000.0)],
+                hover: Some(Point::new(4130.0, -12290.0)),
+                ..Shot::new("05-tangent", None, Layout::Plan)
             },
-            Shot {
-                name: "02-toiture",
-                selection: first(project.roofs.iter().map(|e| e.id).collect()),
-                layout: Layout::Both,
-            },
-            Shot {
-                name: "03-escalier",
-                selection: first(project.stairs.iter().map(|e| e.id).collect()),
-                layout: Layout::Both,
-            },
-            Shot {
-                name: "04-terrain",
-                selection: first(project.meshes.iter().map(|e| e.id).collect()),
-                layout: Layout::Both,
-            },
-            Shot {
-                name: "05-3d",
-                selection: None,
-                layout: Layout::Model,
-            },
+            Shot::new("06-3d", None, Layout::Model),
         ];
         Self {
             dir,
@@ -77,13 +98,57 @@ impl Capture {
             wait: SETTLE,
             saved: channel(),
             pending: false,
+            script: VecDeque::new(),
+            scripted: false,
         }
     }
 
     /// Whether this frame should fit both views to the model, as Home does:
     /// a few frames into each shot, once the palette has taken its width.
-    pub fn fits(&self) -> bool {
+    fn fits(&self) -> bool {
         !self.pending && self.wait == SETTLE / 2
+    }
+
+    /// Called before every frame: fits the views as Home does, then moves
+    /// and clicks the pointer as the shot says, one step per frame.
+    pub fn input(&mut self, workspace: &Workspace, raw: &mut RawInput) {
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        if self.fits() {
+            raw.events.push(key(egui::Key::Home));
+            self.scripted = false;
+            return;
+        }
+        let Some(shot) = self.shots.get(self.next).filter(|_| !self.pending) else {
+            return;
+        };
+        if !self.scripted && self.wait < SETTLE / 2 {
+            self.scripted = true;
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            for &p in &shot.clicks {
+                let pos = workspace.screen_of(p);
+                self.script
+                    .push_back(vec![Event::PointerMoved(pos), button(pos, true)]);
+                self.script.push_back(vec![button(pos, false)]);
+            }
+            if let Some(p) = shot.hover {
+                self.script
+                    .push_back(vec![Event::PointerMoved(workspace.screen_of(p))]);
+            }
+        }
+        if let Some(events) = self.script.pop_front() {
+            raw.events.extend(events);
+        }
     }
 
     /// Called every frame, after the workspace is drawn: sets up the next
@@ -111,10 +176,11 @@ impl Capture {
         };
         if self.wait == SETTLE {
             workspace.select(shot.selection);
+            workspace.set_tool(shot.tool);
             workspace.set_layout(shot.layout);
         }
-        if self.wait > 0 {
-            self.wait -= 1;
+        if self.wait > 0 || !self.script.is_empty() {
+            self.wait = self.wait.saturating_sub(1);
             return;
         }
         let path = self.dir.join(format!("{}.png", shot.name));

@@ -6,6 +6,7 @@ mod model_view;
 mod plan;
 mod properties;
 mod snap;
+mod typed;
 mod wall_tool;
 
 use archibim_commands::{Command, History};
@@ -24,6 +25,7 @@ use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
 pub use snap::{PICKED_EDGES, Scene, Snap, SnapKind, SnapOptions};
+use typed::Typed;
 use wall_tool::rectangle;
 pub use wall_tool::{WallMethod, WallTool};
 
@@ -134,6 +136,11 @@ pub struct Workspace {
     snap_options: SnapOptions,
     /// Edges the pointer passed over, most recent first, for guide lines.
     picked: Vec<(Point, Point)>,
+    /// Length and angle typed for the next point.
+    typed: Typed,
+    /// Picking two points to place the next one halfway between them:
+    /// the points picked so far.
+    halfway: Option<Vec<Point>>,
 }
 
 impl Workspace {
@@ -157,6 +164,8 @@ impl Workspace {
             message: None,
             snap_options: SnapOptions::default(),
             picked: Vec::new(),
+            typed: Typed::default(),
+            halfway: None,
         }
     }
 
@@ -170,6 +179,45 @@ impl Workspace {
     /// Shows the plan, the 3D view, or both.
     pub fn set_layout(&mut self, layout: Layout) {
         self.layout = layout;
+    }
+
+    /// Makes `tool` the active tool, as clicking it does.
+    pub fn set_tool(&mut self, tool: Tool) {
+        if self.tool != tool {
+            self.stop();
+        }
+        self.tool = tool;
+    }
+
+    /// Where the model point `p` shows on screen in the plan view.
+    pub fn screen_of(&self, p: Point) -> egui::Pos2 {
+        self.view.screen(p)
+    }
+
+    /// Called on the input before each frame: while a tool draws and no
+    /// palette field has the keyboard, Tab switches between the typed
+    /// length and angle instead of moving the keyboard focus.
+    pub fn filter_input(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if self.tool == Tool::Select || ctx.memory(|m| m.focused().is_some()) {
+            return;
+        }
+        let mut events = Vec::with_capacity(raw.events.len());
+        for event in raw.events.drain(..) {
+            match event {
+                egui::Event::Key {
+                    key: Key::Tab,
+                    pressed,
+                    modifiers,
+                    ..
+                } if modifiers.is_none() => {
+                    if pressed {
+                        events.push(egui::Event::Text("<".to_owned()));
+                    }
+                }
+                other => events.push(other),
+            }
+        }
+        raw.events = events;
     }
 
     /// Shows the whole workspace. Returns true when the project changed.
@@ -186,7 +234,16 @@ impl Workspace {
             }
         });
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(self.message.as_deref().unwrap_or(""));
+            let hint = match self.halfway.as_ref().map(Vec::len) {
+                Some(0) => t("halfway.first"),
+                Some(_) => t("halfway.second"),
+                None if self.tool != Tool::Select => t("draw.hint"),
+                None => "",
+            };
+            ui.label(match (self.halfway.is_some(), self.message.as_deref()) {
+                (false, Some(message)) => message,
+                _ => hint,
+            });
         });
         if self.dirty || self.model.stale(self.selection) {
             self.model.rebuild(history.project(), self.selection);
@@ -196,7 +253,7 @@ impl Workspace {
             Layout::Plan => changed |= self.plan(ui, history, plan),
             Layout::Model => {
                 let typing = ui.ctx().memory(|m| m.focused().is_some());
-                changed |= !typing && self.keys(ui, history, None);
+                changed |= !typing && self.keys(ui, history, plan, None, None);
                 self.model.show(ui);
             }
             Layout::Both => ui.columns(2, |columns| {
@@ -268,6 +325,16 @@ impl Workspace {
             ui.label(t("snap.divisions"));
             ui.add(egui::DragValue::new(&mut o.divisions).range(2..=12));
         });
+        if self.tool != Tool::Select
+            && ui
+                .selectable_label(self.halfway.is_some(), t("snap.halfway"))
+                .clicked()
+        {
+            self.halfway = match self.halfway {
+                Some(_) => None,
+                None => Some(Vec::new()),
+            };
+        }
         ui.separator();
         for (layout, key) in [
             (Layout::Plan, "view.plan"),
@@ -369,6 +436,8 @@ impl Workspace {
         self.slab_points.clear();
         self.beam_start = None;
         self.picked.clear();
+        self.typed.clear();
+        self.halfway = None;
     }
 
     fn run(&mut self, history: &mut History, command: Command) -> bool {
@@ -420,13 +489,16 @@ impl Workspace {
             scene.pick(&self.picked);
             scene.snap(&self.snap_options, p, from, shift, snap)
         });
-        let cursor = snapped.as_ref().map(|s| s.point);
+        // Where the next point goes: what was typed, or the snapped pointer.
+        let cursor = snapped
+            .as_ref()
+            .map(|s| self.typed.point(from, s).unwrap_or(s.point));
         if let Some(p) = cursor {
             self.wall.hover(p);
         }
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
-        let mut changed = !typing && self.keys(ui, history, cursor);
+        let mut changed = !typing && self.keys(ui, history, plan, snapped.as_ref(), from);
         // Space held: the tool takes the contour under the pointer.
         let space = !typing && ui.input(|i| i.key_down(Key::Space));
         let outline_story = match self.tool {
@@ -456,7 +528,7 @@ impl Workspace {
                     }
                 };
             } else if let Some(p) = cursor {
-                changed |= self.click(history, plan, p, snap);
+                changed |= self.place(history, plan, p, snap);
             }
         }
 
@@ -477,6 +549,22 @@ impl Workspace {
             rectangle_from,
             cursor,
         );
+        if let Some(p) = cursor
+            && self.tool != Tool::Select
+        {
+            let live = from.map(|a| {
+                let (dx, dy) = (p.x - a.x, p.y - a.y);
+                ((dx * dx + dy * dy).sqrt(), dy.atan2(dx).to_degrees())
+            });
+            // Typed values that give no point show as a warning.
+            let gives_point = snapped
+                .as_ref()
+                .is_some_and(|s| self.typed.point(from, s).is_some());
+            let label = self.typed.label(live);
+            let warn = !self.typed.is_empty() && !gives_point;
+            self.view
+                .measure(&painter, p, &label, warn, self.halfway.as_deref());
+        }
         if let Some(outline) = &contour {
             self.view.contour(&painter, outline);
         } else if let Some(s) = &snapped {
@@ -486,6 +574,22 @@ impl Workspace {
             ui.ctx().request_repaint();
         }
         changed
+    }
+
+    /// Places the point `p`, or, while picking two points to go halfway
+    /// between, picks it.
+    fn place(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
+        self.typed.clear();
+        let Some(picked) = &mut self.halfway else {
+            return self.click(history, plan, p, snap);
+        };
+        let Some(&a) = picked.first() else {
+            picked.push(p);
+            return false;
+        };
+        self.halfway = None;
+        let middle = Point::new((a.x + p.x) / 2.0, (a.y + p.y) / 2.0);
+        self.click(history, plan, middle, snap)
     }
 
     fn click(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
@@ -619,8 +723,18 @@ impl Workspace {
         self.run(history, Command::AddStair(stair))
     }
 
-    /// Keyboard: undo, redo, delete, escape, and the typed lengths.
-    fn keys(&mut self, ui: &Ui, history: &mut History, cursor: Option<Point>) -> bool {
+    /// Keyboard: undo, redo, delete, escape, the typed lengths and angles,
+    /// and M for the point halfway between two others.
+    fn keys(
+        &mut self,
+        ui: &Ui,
+        history: &mut History,
+        plan: &[LayerPlan],
+        snapped: Option<&Snap>,
+        from: Option<Point>,
+    ) -> bool {
+        let drawing = self.tool != Tool::Select;
+        let snap = f64::from(SNAP_PX / self.view.scale());
         let (undo, redo, delete) = ui.input_mut(|i| {
             let redo = i.consume_key(Modifiers::COMMAND, Key::Y)
                 || i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
@@ -643,21 +757,41 @@ impl Workspace {
         let events = ui.input(|i| i.events.clone());
         for event in events {
             match event {
-                egui::Event::Text(text) if self.tool == Tool::Wall => {
-                    text.chars().for_each(|c| self.wall.type_char(c));
+                egui::Event::Text(text) if drawing => {
+                    for c in text.chars() {
+                        if c.eq_ignore_ascii_case(&'m') {
+                            self.halfway = match self.halfway {
+                                Some(_) => None,
+                                None => Some(Vec::new()),
+                            };
+                        } else {
+                            self.typed.type_char(c, from.is_some());
+                        }
+                    }
                 }
                 egui::Event::Key {
                     key, pressed: true, ..
                 } => match key {
-                    Key::Backspace => self.wall.erase(),
-                    Key::Tab if self.tool == Tool::Wall => self.wall.switch_field(),
+                    Key::Backspace => self.typed.erase(),
+                    // Escape first forgets what was typed or picked, then
+                    // stops drawing.
+                    Key::Escape if self.halfway.is_some() => self.halfway = None,
+                    Key::Escape if !self.typed.is_empty() => self.typed.clear(),
                     Key::Escape => {
                         self.stop();
                         self.selection = None;
                     }
-                    Key::Enter if self.tool == Tool::Wall => {
-                        changed |= self.wall.enter(history, cursor);
+                    // With something typed, Enter places that point.
+                    Key::Enter
+                        if drawing
+                            && snapped.is_some_and(|s| self.typed.point(from, s).is_some()) =>
+                    {
+                        if let Some(p) = snapped.and_then(|s| self.typed.point(from, s)) {
+                            changed |= self.place(history, plan, p, snap);
+                        }
                     }
+                    // Typed values that give no point: Enter waits for a fix.
+                    Key::Enter if !self.typed.is_empty() => {}
                     Key::Enter if matches!(self.tool, Tool::Slab | Tool::Roof | Tool::Mesh) => {
                         changed |= self.close_outline(history);
                     }

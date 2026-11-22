@@ -39,15 +39,10 @@ impl eframe::App for App {
         }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &eframe::egui::Context, raw: &mut eframe::egui::RawInput) {
-        if self.capture.as_ref().is_some_and(Capture::fits) {
-            raw.events.push(eframe::egui::Event::Key {
-                key: eframe::egui::Key::Home,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: eframe::egui::Modifiers::NONE,
-            });
+    fn raw_input_hook(&mut self, ctx: &eframe::egui::Context, raw: &mut eframe::egui::RawInput) {
+        self.workspace.filter_input(ctx, raw);
+        if let Some(capture) = &mut self.capture {
+            capture.input(&self.workspace, raw);
         }
     }
 }

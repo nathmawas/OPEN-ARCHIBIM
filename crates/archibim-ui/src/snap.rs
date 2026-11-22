@@ -6,6 +6,10 @@
 //! ends), directions parallel and perpendicular to it, and the foot of the
 //! perpendicular from the last point placed.
 //!
+//! Curved walls give their arcs, the middle of each, and from the last
+//! point placed the points where a line touches the arc (tangent) or meets
+//! it square (through the centre).
+//!
 //! Pure logic: the plan view draws the result.
 
 use archibim_geometry::{beam_outline, column_outline};
@@ -19,7 +23,7 @@ pub const PICKED_EDGES: usize = 2;
 pub struct SnapOptions {
     /// Ends of walls and beams, corners of faces, slabs and columns.
     pub points: bool,
-    /// Middles of walls and slab edges, or their divisions.
+    /// Middles of every edge and arc, or their divisions.
     pub midpoints: bool,
     /// Where wall lines and slab edges cross.
     pub intersections: bool,
@@ -30,12 +34,13 @@ pub struct SnapOptions {
     /// Horizontal and vertical alignments with nearby points, and along
     /// the current direction.
     pub alignments: bool,
-    /// Guide lines, parallels and perpendiculars from picked-up edges.
+    /// Guide lines, parallels and perpendiculars from picked-up edges, and
+    /// tangents and perpendiculars to arcs.
     pub guides: bool,
     /// The angle step, in degrees: 15, 30, 45 or 90.
     pub step: u16,
-    /// Into how many equal parts walls and slab edges are divided: 2 gives
-    /// their middles.
+    /// Into how many equal parts edges and arcs are divided: 2 gives their
+    /// middles.
     pub divisions: u8,
 }
 
@@ -79,6 +84,8 @@ pub enum SnapKind {
     /// A point on a direction parallel or perpendicular to a picked-up
     /// edge.
     Parallel,
+    /// The point where a line from the last point touches an arc.
+    Tangent,
 }
 
 /// Where the pointer lands, and the guides to draw.
@@ -90,6 +97,64 @@ pub struct Snap {
     pub kind: SnapKind,
     /// Dashed lines from where the snap comes from to the point.
     pub guides: Vec<(Point, Point)>,
+    /// The straight guide the point lies on, if any: where it starts and
+    /// its unit direction, so that a length typed before the first point
+    /// measures along it.
+    pub along: Option<(Point, Point)>,
+}
+
+impl Snap {
+    fn new(point: Point, kind: SnapKind, guides: Vec<(Point, Point)>) -> Self {
+        Self {
+            point,
+            kind,
+            guides,
+            along: None,
+        }
+    }
+
+    /// The same snap, lying on the guide from `origin` through its point.
+    fn from(mut self, origin: Point) -> Self {
+        self.along = unit(sub(self.point, origin)).map(|u| (origin, u));
+        self
+    }
+}
+
+/// A circular arc: the reference line or a face of a curved wall.
+#[derive(Clone, Copy, Debug)]
+struct Arc {
+    centre: Point,
+    radius: f64,
+    /// Direction of the start from the centre, in radians.
+    from: f64,
+    /// Turn from the start to the end, anticlockwise when positive.
+    sweep: f64,
+}
+
+impl Arc {
+    fn at(&self, a: f64) -> Point {
+        Point::new(
+            self.centre.x + self.radius * a.cos(),
+            self.centre.y + self.radius * a.sin(),
+        )
+    }
+
+    /// Whether the direction `a` from the centre lies within the arc.
+    fn spans(&self, a: f64) -> bool {
+        let tau = std::f64::consts::TAU;
+        let turn = if self.sweep >= 0.0 {
+            (a - self.from).rem_euclid(tau)
+        } else {
+            (self.from - a).rem_euclid(tau)
+        };
+        turn <= self.sweep.abs() + 1e-9
+    }
+
+    /// The point of the arc nearest `p`, if `p` is within its span.
+    fn nearest(&self, p: Point) -> Option<Point> {
+        let a = direction(self.centre, p)?;
+        self.spans(a).then(|| self.at(a))
+    }
 }
 
 /// An infinite guide line, drawn from the nearer of its anchors.
@@ -120,11 +185,12 @@ impl Line {
 #[derive(Debug, Default)]
 pub struct Scene {
     points: Vec<Point>,
-    /// Walls and slab edges, divided for the middle points.
+    /// Straight edges, divided for the middle points.
     divided: Vec<(Point, Point)>,
     intersections: Vec<Point>,
     segments: Vec<(Point, Point)>,
     picked: Vec<(Point, Point)>,
+    arcs: Vec<Arc>,
 }
 
 impl Scene {
@@ -136,11 +202,27 @@ impl Scene {
         let mut lines = Vec::new();
         for w in &project.walls {
             s.points.extend([w.start, w.end]);
-            if let Some((centre, _)) = w.arc() {
+            if let Some((centre, r)) = w.arc() {
                 s.points.push(centre);
+                let Some(from) = direction(centre, w.start) else {
+                    continue;
+                };
+                // The left of an anticlockwise arc is towards the centre.
+                let inward = if w.sweep > 0.0 { -1.0 } else { 1.0 };
+                let left = r + inward * w.left_face_shift();
+                let right = left - inward * w.thickness();
+                for radius in [r, left, right].into_iter().filter(|r| *r > 1e-9) {
+                    let arc = Arc {
+                        centre,
+                        radius,
+                        from,
+                        sweep: w.sweep,
+                    };
+                    s.points.extend([arc.at(from), arc.at(from + w.sweep)]);
+                    s.arcs.push(arc);
+                }
                 continue;
             }
-            s.divided.push((w.start, w.end));
             lines.push((w.start, w.end));
             if let Some((a, b)) = w.left_face() {
                 let k = w.thickness() / distance(a, b);
@@ -155,9 +237,23 @@ impl Scene {
             for i in 0..n {
                 let (a, b) = (slab.outline[i], slab.outline[(i + 1) % n]);
                 s.points.push(a);
-                s.divided.push((a, b));
                 lines.push((a, b));
             }
+        }
+        let outlines = project.roofs.iter().map(|r| r.outline.clone()).chain(
+            project
+                .meshes
+                .iter()
+                .map(|m| m.outline.iter().map(|q| q.at).collect()),
+        );
+        for outline in outlines {
+            let n = outline.len();
+            s.points.extend(outline.iter().copied());
+            lines.extend((0..n).map(|i| (outline[i], outline[(i + 1) % n])));
+        }
+        for stair in &project.stairs {
+            s.points.extend(stair.path.iter().copied());
+            lines.extend(stair.path.windows(2).map(|w| (w[0], w[1])));
         }
         for c in &project.columns {
             s.points.push(c.at);
@@ -178,6 +274,7 @@ impl Scene {
             }
         }
         s.segments.extend(lines);
+        s.divided.clone_from(&s.segments);
         s
     }
 
@@ -238,11 +335,7 @@ impl Scene {
         shift: bool,
         tolerance: f64,
     ) -> Snap {
-        let free = |kind, point| Snap {
-            point,
-            kind,
-            guides: Vec::new(),
-        };
+        let free = |kind, point| Snap::new(point, kind, Vec::new());
         let lines = if options.guides {
             self.lines()
         } else {
@@ -253,6 +346,9 @@ impl Scene {
                 return s;
             }
             if let Some(s) = self.perpendicular(options, p, from, tolerance) {
+                return s;
+            }
+            if let Some(s) = self.curved(options, p, from, tolerance) {
                 return s;
             }
             if let Some(s) = crossing_lines(&lines, p, tolerance) {
@@ -275,33 +371,53 @@ impl Scene {
             .min_by(|a, b| distance(a.foot(p), p).total_cmp(&distance(b.foot(p), p)))
         {
             let point = l.foot(p);
-            return Snap {
-                point,
-                kind: SnapKind::Guide,
-                guides: vec![(l.anchor(point), point)],
-            };
+            let anchor = l.anchor(point);
+            return Snap::new(point, SnapKind::Guide, vec![(anchor, point)]).from(anchor);
         }
         if options.alignments
             && let Some(s) = self.aligned(p, from, tolerance)
         {
             return s;
         }
-        if options.edges
-            && let Some((q, _)) = self.on_edge(p, tolerance)
-        {
-            return free(SnapKind::Edge, q);
+        if options.edges {
+            let arc = self
+                .arcs
+                .iter()
+                .filter_map(|a| a.nearest(p))
+                .filter(|q| distance(*q, p) <= tolerance)
+                .min_by(|a, b| distance(*a, p).total_cmp(&distance(*b, p)));
+            match (self.on_edge(p, tolerance), arc) {
+                (Some((q, _)), Some(c)) if distance(c, p) < distance(q, p) => {
+                    return free(SnapKind::Edge, c);
+                }
+                // On a straight edge, a typed length runs from its nearer end.
+                (Some((q, (a, b))), _) => {
+                    let end = if distance(a, q) <= distance(b, q) {
+                        a
+                    } else {
+                        b
+                    };
+                    return free(SnapKind::Edge, q).from(end);
+                }
+                (None, Some(c)) => return free(SnapKind::Edge, c),
+                (None, None) => {}
+            }
         }
         free(SnapKind::Free, p)
     }
 
     fn on_point(&self, options: &SnapOptions, p: Point, tolerance: f64) -> Option<Snap> {
         let n = options.divisions.max(2);
+        let part = move |k: u8| f64::from(k) / f64::from(n);
         let divisions: Vec<Point> = self
             .divided
             .iter()
-            .flat_map(|&(a, b)| {
-                (1..n).map(move |k| add(a, mul(sub(b, a), f64::from(k) / f64::from(n))))
-            })
+            .flat_map(|&(a, b)| (1..n).map(move |k| add(a, mul(sub(b, a), part(k)))))
+            .chain(
+                self.arcs
+                    .iter()
+                    .flat_map(|c| (1..n).map(move |k| c.at(c.from + c.sweep * part(k)))),
+            )
             .collect();
         let sets = [
             (options.points, &self.points, SnapKind::Point),
@@ -317,10 +433,48 @@ impl Scene {
             .flat_map(|(_, points, kind)| points.iter().map(move |q| (*q, *kind)))
             .filter(|(q, _)| distance(*q, p) <= tolerance)
             .min_by(|a, b| distance(a.0, p).total_cmp(&distance(b.0, p)))
-            .map(|(point, kind)| Snap {
-                point,
-                kind,
-                guides: Vec::new(),
+            .map(|(point, kind)| Snap::new(point, kind, Vec::new()))
+    }
+
+    /// From the last point, the points of an arc where a line touches it,
+    /// and where the line through its centre meets it square.
+    fn curved(
+        &self,
+        options: &SnapOptions,
+        p: Point,
+        from: Option<Point>,
+        tolerance: f64,
+    ) -> Option<Snap> {
+        let start = from.filter(|_| options.guides)?;
+        let pi = std::f64::consts::PI;
+        let mut found = Vec::new();
+        for arc in &self.arcs {
+            let Some(towards) = direction(arc.centre, start) else {
+                continue;
+            };
+            for a in [towards, towards + pi] {
+                found.push((a, SnapKind::Perpendicular, arc));
+            }
+            let d = distance(start, arc.centre);
+            if d > arc.radius + 1e-9 {
+                let half = (arc.radius / d).acos();
+                for a in [towards + half, towards - half] {
+                    found.push((a, SnapKind::Tangent, arc));
+                }
+            }
+        }
+        found
+            .into_iter()
+            .filter(|(a, _, arc)| arc.spans(*a))
+            .map(|(a, kind, arc)| (arc.at(a), kind, arc.centre))
+            .filter(|(q, ..)| distance(*q, p) <= tolerance && distance(*q, start) > tolerance)
+            .min_by(|x, y| distance(x.0, p).total_cmp(&distance(y.0, p)))
+            .map(|(point, kind, centre)| {
+                let mut guides = vec![(start, point)];
+                if kind == SnapKind::Perpendicular {
+                    guides.push((centre, point));
+                }
+                Snap::new(point, kind, guides)
             })
     }
 
@@ -344,10 +498,12 @@ impl Scene {
                     .then(|| (foot, line.anchor(foot)))
             })
             .min_by(|x, y| distance(x.0, p).total_cmp(&distance(y.0, p)))
-            .map(|(point, anchor)| Snap {
-                point,
-                kind: SnapKind::Perpendicular,
-                guides: vec![(start, point), (anchor, point)],
+            .map(|(point, anchor)| {
+                Snap::new(
+                    point,
+                    SnapKind::Perpendicular,
+                    vec![(start, point), (anchor, point)],
+                )
             })
     }
 
@@ -411,11 +567,7 @@ impl Scene {
             let point = at(s);
             let mut guides = vec![(start, point)];
             guides.extend(guide.map(|g| (g, point)));
-            Snap {
-                point,
-                kind,
-                guides,
-            }
+            Snap::new(point, kind, guides)
         };
         let mut on_ray: Vec<(f64, Option<Point>)> = self
             .points
@@ -436,6 +588,13 @@ impl Scene {
                 let s = line_line(start, u, l.anchors[0], l.u)?;
                 Some((s, Some(l.anchor(at(s)))))
             }))
+            .chain(
+                self.arcs
+                    .iter()
+                    .filter(|_| options.edges || options.intersections)
+                    .flat_map(|c| circle_cross(start, u, c))
+                    .map(|s| (s, None)),
+            )
             .filter(|(s, _)| near(*s))
             .collect();
         if let Some((s, guide)) = best(&mut crossings) {
@@ -473,14 +632,19 @@ impl Scene {
             vertical.map_or(p.x, |q| q.x),
             horizontal.map_or(p.y, |q| q.y),
         );
-        Some(Snap {
+        let snap = Snap::new(
             point,
-            kind: SnapKind::Alignment,
-            guides: vertical
+            SnapKind::Alignment,
+            vertical
                 .into_iter()
                 .chain(horizontal)
                 .map(|q| (q, point))
                 .collect(),
+        );
+        // Lined up with one point only: a typed length runs from it.
+        Some(match (vertical, horizontal) {
+            (Some(q), None) | (None, Some(q)) => snap.from(q),
+            _ => snap,
         })
     }
 
@@ -514,11 +678,11 @@ fn crossing_lines(lines: &[Line], p: Point, tolerance: f64) -> Option<Snap> {
                 .as_ref()
                 .is_none_or(|b| distance(point, p) < distance(b.point, p));
             if distance(point, p) <= tolerance && better {
-                best = Some(Snap {
+                best = Some(Snap::new(
                     point,
-                    kind: SnapKind::Intersection,
-                    guides: vec![(l.anchor(point), point), (m.anchor(point), point)],
-                });
+                    SnapKind::Intersection,
+                    vec![(l.anchor(point), point), (m.anchor(point), point)],
+                ));
             }
         }
     }
@@ -530,6 +694,28 @@ fn crossing_lines(lines: &[Line], p: Point, tolerance: f64) -> Option<Snap> {
 fn line_line(a: Point, u: Point, c: Point, v: Point) -> Option<f64> {
     let den = cross(u, v);
     (den.abs() > 1e-9).then(|| cross(sub(c, a), v) / den)
+}
+
+/// How far along the line from `start` in direction `u` it crosses the
+/// arc `c`, at most twice.
+fn circle_cross(start: Point, u: Point, c: &Arc) -> Vec<f64> {
+    let w = sub(start, c.centre);
+    let b = dot(u, w);
+    let disc = b * b - (dot(w, w) - c.radius * c.radius);
+    if disc < 0.0 {
+        return Vec::new();
+    }
+    let root = disc.sqrt();
+    [-b - root, -b + root]
+        .into_iter()
+        .filter(|s| direction(c.centre, add(start, mul(u, *s))).is_some_and(|a| c.spans(a)))
+        .collect()
+}
+
+/// The direction of `p` from `centre`, in radians.
+fn direction(centre: Point, p: Point) -> Option<f64> {
+    let v = sub(p, centre);
+    (dot(v, v) > 1e-18).then(|| v.y.atan2(v.x))
 }
 
 fn unit(v: Point) -> Option<Point> {
@@ -989,5 +1175,240 @@ mod tests {
         assert_eq!(s.snap(&o, far, None, false, 10.0).kind, SnapKind::Guide);
         s.pick(&[]);
         assert_eq!(s.snap(&o, far, None, false, 10.0).kind, SnapKind::Free);
+    }
+
+    /// A quarter of a circle of radius 3000 round the origin, anticlockwise
+    /// from the x axis, or clockwise when `sweep` is negative.
+    fn quarter(sweep: f64) -> Scene {
+        Scene {
+            arcs: vec![Arc {
+                centre: pt(0.0, 0.0),
+                radius: 3000.0,
+                from: 0.0,
+                sweep,
+            }],
+            ..Scene::default()
+        }
+    }
+
+    // ponytail: drawing cases have no runner under their own name in
+    // archibim-commands (it cannot reach the ui crate); this test stands
+    // for tests/cases/drawing/drawing-instruments.yaml.
+    #[test]
+    fn drawing_instruments() {
+        let half = std::f64::consts::FRAC_PI_2;
+        let s = quarter(half);
+        let o = SnapOptions::default();
+        let k = 3000.0 * std::f64::consts::FRAC_1_SQRT_2;
+        // On the arc, and its middle.
+        let r = s.snap(&o, pt(2700.0, 1310.0), None, false, 10.0);
+        assert!(
+            (distance(r.point, pt(0.0, 0.0)) - 3000.0).abs() < 1e-6,
+            "{r:?}"
+        );
+        assert_eq!(r.kind, SnapKind::Edge);
+        let r = s.snap(&o, pt(k + 4.0, k - 3.0), None, false, 10.0);
+        assert!(
+            close(r.point, k, k) && r.kind == SnapKind::Midpoint,
+            "{r:?}"
+        );
+        // From (6000, 0) a line touches the arc at 60 degrees.
+        let start = Some(pt(6000.0, 0.0));
+        let touch = pt(1500.0, 3000.0 * 60f64.to_radians().sin());
+        let r = s.snap(&o, pt(touch.x + 5.0, touch.y + 4.0), start, false, 10.0);
+        assert!(close(r.point, touch.x, touch.y), "{r:?}");
+        assert_eq!(r.kind, SnapKind::Tangent);
+        assert!(r.guides.contains(&(pt(6000.0, 0.0), r.point)));
+        // The other tangent, at -60 degrees, is off the arc.
+        let r = s.snap(&o, pt(1505.0, -touch.y), start, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // Square to the arc: on the line from the last point to the centre.
+        let from = pt(6000.0, 1000.0);
+        let a = from.y.atan2(from.x);
+        let square = pt(3000.0 * a.cos(), 3000.0 * a.sin());
+        let r = s.snap(&o, pt(square.x - 6.0, square.y), Some(from), false, 10.0);
+        assert!(close(r.point, square.x, square.y), "{r:?}");
+        assert_eq!(r.kind, SnapKind::Perpendicular);
+        // From inside the circle there is no tangent.
+        let inside = Some(pt(1000.0, 0.0));
+        let r = s.snap(&o, pt(touch.x + 5.0, touch.y + 4.0), inside, false, 10.0);
+        assert_ne!(r.kind, SnapKind::Tangent, "{r:?}");
+        // Guides off: no tangent; edges off: no point on the arc.
+        let off = SnapOptions { guides: false, ..o };
+        let r = s.snap(&off, pt(touch.x + 5.0, touch.y + 4.0), start, false, 10.0);
+        assert_ne!(r.kind, SnapKind::Tangent, "{r:?}");
+        let off = SnapOptions { edges: false, ..o };
+        let r = s.snap(&off, pt(2700.0, 1310.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // Going straight up from below, the line stops on the arc.
+        let r = s.snap(
+            &o,
+            pt(1500.0, 2590.0),
+            Some(pt(1500.0, -5000.0)),
+            true,
+            10.0,
+        );
+        assert!(close(r.point, touch.x, touch.y), "{r:?}");
+        assert_eq!(r.kind, SnapKind::Intersection);
+        // A clockwise quarter lies below the x axis.
+        let s = quarter(-half);
+        let r = s.snap(&o, pt(1505.0, -touch.y), start, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Tangent, "{r:?}");
+    }
+
+    #[test]
+    fn a_point_on_a_guide_or_an_edge_knows_where_it_starts() {
+        let mut s = scene(&[], &[((0.0, 0.0), (4000.0, 0.0))]);
+        let o = SnapOptions::default();
+        // On the edge, nearer its start.
+        let r = s.snap(&o, pt(1000.0, 3.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Edge);
+        assert_eq!(r.along, Some((pt(0.0, 0.0), pt(1.0, 0.0))), "{r:?}");
+        // On the extension of a picked edge, from its end.
+        s.pick(&[(pt(0.0, 0.0), pt(1000.0, 0.0))]);
+        let r = s.snap(&o, pt(6000.0, 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Guide, "{r:?}");
+        let Some((origin, u)) = r.along else {
+            panic!("{r:?}")
+        };
+        assert!(close(origin, 1000.0, 0.0) && close(u, 1.0, 0.0), "{r:?}");
+        // Free: no guide.
+        let r = s.snap(&o, pt(2000.0, 3000.0), None, false, 10.0);
+        assert_eq!(r.along, None, "{r:?}");
+    }
+
+    #[test]
+    fn every_straight_edge_has_a_middle() {
+        let mut s = scene(&[], &[]);
+        // A beam side, a roof edge, a stair line: all are divided alike.
+        s.divided.extend([
+            (pt(0.0, 0.0), pt(0.0, 2000.0)),
+            (pt(5000.0, 0.0), pt(7000.0, 0.0)),
+        ]);
+        let o = SnapOptions::default();
+        for (x, y) in [(0.0, 1000.0), (6000.0, 0.0)] {
+            let r = s.snap(&o, pt(x + 3.0, y + 3.0), None, false, 10.0);
+            assert!(
+                close(r.point, x, y) && r.kind == SnapKind::Midpoint,
+                "{r:?}"
+            );
+        }
+    }
+
+    fn curved_wall(sweep: f64, thickness: f64) -> archibim_model::Wall {
+        use archibim_model::*;
+        let level = LevelRef {
+            story: Id(2),
+            kind: LevelKind::Structural,
+            offset: 0.0,
+        };
+        Wall {
+            id: Id(1),
+            story: Id(2),
+            start: pt(3000.0, 0.0),
+            end: pt(0.0, 3000.0),
+            reference: WallReference::Axis,
+            offset: 0.0,
+            sweep,
+            layers: vec![Layer {
+                role: LayerRole::LoadBearing,
+                material: Id(3),
+                thickness,
+                status: RenovationStatus::New,
+                framing: None,
+            }],
+            bottom: level,
+            top: level,
+        }
+    }
+
+    #[test]
+    fn curved_walls_give_arcs_even_thick_or_nearly_closed() {
+        let o = SnapOptions::default();
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let tau = std::f64::consts::TAU;
+        for (sweep, thickness) in [
+            (quarter, 200.0),
+            (-quarter, 200.0),
+            // Thicker than the radius: the inner face has no radius.
+            (quarter, 9000.0),
+            (tau - 0.01, 200.0),
+            (-(tau - 0.01), 200.0),
+        ] {
+            let mut project = Project::new();
+            project.walls.push(curved_wall(sweep, thickness));
+            let s = Scene::new(&project, &[pt(0.0, 0.0)]);
+            for a in &s.arcs {
+                assert!(a.radius > 0.0 && a.radius.is_finite(), "{a:?}");
+            }
+            let r = s.snap(&o, pt(100.0, 100.0), Some(pt(9000.0, 50.0)), false, 10.0);
+            assert!(r.point.x.is_finite() && r.point.y.is_finite(), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn an_arc_close_to_a_full_turn_spans_almost_every_direction() {
+        let tau = std::f64::consts::TAU;
+        for sweep in [tau - 0.01, -(tau - 0.01)] {
+            let arc = Arc {
+                centre: pt(0.0, 0.0),
+                radius: 1.0,
+                from: 0.0,
+                sweep,
+            };
+            let gap = if sweep > 0.0 { -0.005 } else { 0.005 };
+            assert!(arc.spans(0.0) && arc.spans(3.0) && arc.spans(-3.0));
+            assert!(!arc.spans(gap), "the missing sliver");
+        }
+    }
+
+    #[test]
+    fn the_last_point_on_the_centre_or_the_circle_gives_no_tangent() {
+        let s = quarter(std::f64::consts::FRAC_PI_2);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(5.0, 5.0), Some(pt(0.0, 0.0)), false, 10.0);
+        assert!(r.point.x.is_finite(), "{r:?}");
+        assert_ne!(r.kind, SnapKind::Tangent);
+        // On the circle: the tangent point is the last point itself.
+        let r = s.snap(&o, pt(3002.0, 3.0), Some(pt(3000.0, 0.0)), false, 10.0);
+        assert_ne!(r.kind, SnapKind::Tangent, "{r:?}");
+        assert!(r.point.x.is_finite() && r.point.y.is_finite(), "{r:?}");
+    }
+
+    #[test]
+    fn the_tangent_point_at_the_very_end_of_an_arc_is_found() {
+        // From (6000, 0) the line touches at 60 degrees: an arc of 60 degrees
+        // ends exactly there.
+        let s = quarter(60f64.to_radians());
+        let touch = pt(1500.0, 3000.0 * 60f64.to_radians().sin());
+        let r = s.snap(
+            &SnapOptions::default(),
+            pt(touch.x + 3.0, touch.y + 2.0),
+            Some(pt(6000.0, 0.0)),
+            false,
+            10.0,
+        );
+        assert_eq!(r.kind, SnapKind::Tangent, "{r:?}");
+    }
+
+    #[test]
+    fn degenerate_edges_and_divisions_do_not_break_the_snap() {
+        let mut s = scene(&[], &[((0.0, 0.0), (0.0, 0.0)), ((0.0, 0.0), (0.0, 0.0))]);
+        // A stair path with a repeated point, and a very short edge.
+        s.divided.push((pt(5.0, 5.0), pt(5.0, 5.0)));
+        s.divided.push((pt(100.0, 0.0), pt(100.5, 0.0)));
+        for divisions in [0, 1, 2, 255] {
+            let o = SnapOptions {
+                divisions,
+                ..SnapOptions::default()
+            };
+            for from in [None, Some(pt(0.0, 0.0)), Some(pt(5.0, 5.0))] {
+                for shift in [false, true] {
+                    let r = s.snap(&o, pt(100.2, 0.1), from, shift, 10.0);
+                    assert!(r.point.x.is_finite() && r.point.y.is_finite(), "{r:?}");
+                }
+            }
+        }
+        assert!(s.edge_near(pt(0.0, 0.0), 10.0).is_none());
     }
 }

@@ -95,7 +95,7 @@ impl PlanView {
             0.9 * (self.rect.width() / bounds.width()).min(self.rect.height() / bounds.height());
     }
 
-    fn screen(&self, p: Point) -> Pos2 {
+    pub(crate) fn screen(&self, p: Point) -> Pos2 {
         let d = Vec2::new(p.x as f32, p.y as f32) - self.centre;
         self.rect.center() + Vec2::new(d.x, -d.y) * self.scale
     }
@@ -415,6 +415,19 @@ impl PlanView {
                 painter.line_segment([c + Vec2::splat(-r), c + Vec2::splat(r)], mark);
                 painter.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], mark);
             }
+            SnapKind::Tangent => {
+                // A circle touched by a line along the tangent.
+                let r = 1.5 * r;
+                let d = snap
+                    .guides
+                    .first()
+                    .map(|&(a, b)| (self.screen(b) - self.screen(a)).normalized())
+                    .filter(|d| d.is_finite())
+                    .unwrap_or(Vec2::X);
+                let touch = c + d.rot90() * r;
+                painter.circle_stroke(c, r, mark);
+                painter.line_segment([touch - d * 2.0 * r, touch + d * 2.0 * r], mark);
+            }
             SnapKind::Edge | SnapKind::Alignment | SnapKind::Guide => {
                 painter.line_segment([c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0)], mark);
                 painter.line_segment([c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r)], mark);
@@ -448,7 +461,7 @@ impl PlanView {
             return;
         }
         if let Some(start) = wall.start() {
-            let end = wall.typed_end(start, p).unwrap_or(p);
+            let end = p;
             painter.line_segment([self.screen(start), self.screen(end)], line);
             // The faces, placed from the clicked reference line.
             let ghost = Wall {
@@ -464,21 +477,6 @@ impl PlanView {
                 let outline = [a, b, r(b), r(a)].iter().map(|q| self.screen(*q)).collect();
                 painter.add(Shape::closed_line(outline, Stroke::new(1.0, SELECTED)));
             }
-            let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
-            let typed = wall.typed();
-            let label = if typed.is_empty() {
-                let angle = (end.y - start.y).atan2(end.x - start.x).to_degrees();
-                format!("{length:.0}  {angle:.1}°")
-            } else {
-                typed
-            };
-            painter.text(
-                self.screen(end) + Vec2::new(12.0, -12.0),
-                egui::Align2::LEFT_BOTTOM,
-                label,
-                egui::FontId::proportional(14.0),
-                SELECTED,
-            );
         }
         if !slab.is_empty() {
             let mut points: Vec<Pos2> = slab.iter().map(|q| self.screen(*q)).collect();
@@ -488,6 +486,52 @@ impl PlanView {
         if let Some(start) = beam {
             painter.line_segment([self.screen(start), self.screen(p)], line);
         }
+    }
+}
+
+impl PlanView {
+    /// Next to the point `p` about to be placed, `label`: what was typed
+    /// or the length and angle from the last point, in the warning colour
+    /// when `warn` (typed values that give no point). While picking two
+    /// points to go halfway, the first one and the middle instead.
+    pub(crate) fn measure(
+        &self,
+        painter: &Painter,
+        p: Point,
+        label: &str,
+        warn: bool,
+        halfway: Option<&[Point]>,
+    ) {
+        if let Some(&a) = halfway.and_then(|h| h.first()) {
+            let line = Stroke::new(1.5, GUIDE);
+            painter.extend(Shape::dashed_line(
+                &[self.screen(a), self.screen(p)],
+                Stroke::new(1.0, GUIDE),
+                6.0,
+                4.0,
+            ));
+            painter.circle_stroke(self.screen(a), 6.0, line);
+            let middle = self.screen(Point::new((a.x + p.x) / 2.0, (a.y + p.y) / 2.0));
+            painter.circle_filled(middle, 5.0, GUIDE);
+            painter.text(
+                middle + Vec2::new(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                "1/2",
+                egui::FontId::proportional(14.0),
+                GUIDE,
+            );
+            return;
+        }
+        if label.is_empty() {
+            return;
+        }
+        painter.text(
+            self.screen(p) + Vec2::new(12.0, -12.0),
+            egui::Align2::LEFT_BOTTOM,
+            label,
+            egui::FontId::proportional(14.0),
+            if warn { GUIDE } else { SELECTED },
+        );
     }
 }
 

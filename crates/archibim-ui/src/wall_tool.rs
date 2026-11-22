@@ -1,6 +1,5 @@
-//! The wall tool: one wall, a chain of walls or a rectangle, with lengths
-//! typed at the keyboard. The clicks are the walls' reference line, chosen
-//! in the template.
+//! The wall tool: one wall, a chain of walls or a rectangle. The clicks are
+//! the walls' reference line, chosen in the template.
 
 use archibim_commands::{Command, History};
 use archibim_model::{Point, Wall};
@@ -33,12 +32,6 @@ pub struct WallTool {
     pub method: WallMethod,
     /// The points clicked in the current chain or rectangle.
     points: Vec<Point>,
-    /// The length typed so far.
-    typed: String,
-    /// The angle typed so far, in degrees anticlockwise from the x axis.
-    angle: String,
-    /// Typing goes to the angle rather than the length.
-    on_angle: bool,
     /// How far the pointer has turned around the centre of an arc, and
     /// where it was last.
     turn: f64,
@@ -52,9 +45,6 @@ impl WallTool {
             template,
             method: WallMethod::Chain,
             points: Vec::new(),
-            typed: String::new(),
-            angle: String::new(),
-            on_angle: false,
             turn: 0.0,
             last_angle: None,
         }
@@ -100,113 +90,15 @@ impl WallTool {
         &self.points
     }
 
-    /// What was typed, to show next to the pointer: the length, then the
-    /// angle after `<`.
-    pub fn typed(&self) -> String {
-        if self.angle.is_empty() && !self.on_angle {
-            self.typed.clone()
-        } else {
-            format!("{} < {}°", self.typed, self.angle)
-        }
-    }
-
-    /// Tab or `<`: typing goes to the angle, or back to the length.
-    pub fn switch_field(&mut self) {
-        if self.start().is_some() {
-            self.on_angle = !self.on_angle;
-        }
-    }
-
-    fn clear_typed(&mut self) {
-        self.typed.clear();
-        self.angle.clear();
-        self.on_angle = false;
-    }
-
     /// A click: starts drawing, or places the next point. Returns true when
     /// walls were added.
     pub fn click(&mut self, history: &mut History, p: Point) -> bool {
-        let p = match self.start() {
-            Some(start) => self.typed_end(start, p).unwrap_or(p),
-            None => p,
-        };
-        self.clear_typed();
         self.place(history, p)
-    }
-
-    /// Enter: ends the wall at the typed length, towards the pointer.
-    pub fn enter(&mut self, history: &mut History, toward: Option<Point>) -> bool {
-        let (Some(start), Some(toward)) = (self.start(), toward) else {
-            return false;
-        };
-        let Some(end) = self.typed_end(start, toward) else {
-            return false;
-        };
-        self.clear_typed();
-        self.place(history, end)
-    }
-
-    /// The end of the wall from `start` with what was typed: the typed
-    /// length, along the typed angle or towards `toward`. With an angle
-    /// and no length, the pointer's distance along that angle.
-    pub fn typed_end(&self, start: Point, toward: Point) -> Option<Point> {
-        let number = |s: &str| s.replace(',', ".").parse::<f64>().ok();
-        let (length, angle) = (number(&self.typed), number(&self.angle));
-        let (dx, dy) = match angle {
-            Some(degrees) => {
-                let a = degrees.to_radians();
-                (a.cos(), a.sin())
-            }
-            None => {
-                let (dx, dy) = (toward.x - start.x, toward.y - start.y);
-                let norm = (dx * dx + dy * dy).sqrt();
-                if norm == 0.0 {
-                    return None;
-                }
-                (dx / norm, dy / norm)
-            }
-        };
-        let length = match (length, angle) {
-            (Some(l), _) => l,
-            (None, Some(_)) => (toward.x - start.x) * dx + (toward.y - start.y) * dy,
-            (None, None) => return None,
-        };
-        (length > 0.0).then(|| Point::new(start.x + dx * length, start.y + dy * length))
-    }
-
-    /// A typed character: digits and a decimal separator build the length,
-    /// or the angle after `<`, which may be negative.
-    pub fn type_char(&mut self, c: char) {
-        if self.start().is_none() {
-            return;
-        }
-        match c {
-            '<' => self.switch_field(),
-            '-' if self.on_angle && self.angle.is_empty() => self.angle.push(c),
-            c if c.is_ascii_digit() || c == '.' || c == ',' => {
-                if self.on_angle {
-                    self.angle.push(c);
-                } else {
-                    self.typed.push(c);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Backspace: erases the last typed character.
-    pub fn erase(&mut self) {
-        if !self.on_angle {
-            self.typed.pop();
-        } else if self.angle.pop().is_none() {
-            self.on_angle = false;
-        }
     }
 
     /// Escape: stops drawing.
     pub fn stop(&mut self) {
         self.points.clear();
-        self.clear_typed();
         self.turn = 0.0;
         self.last_angle = None;
     }
@@ -465,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn walls_chain_and_take_the_typed_length() -> Result {
+    fn walls_chain() -> Result {
         let (mut h, mut tool) = setup()?;
         assert!(
             !tool.click(&mut h, Point::new(0.0, 0.0)),
@@ -475,12 +367,11 @@ mod tests {
             tool.click(&mut h, Point::new(3000.0, 0.0)),
             "second click adds"
         );
-        "4000".chars().for_each(|c| tool.type_char(c));
-        assert!(tool.enter(&mut h, Some(Point::new(3000.0, 10.0))));
+        assert!(tool.click(&mut h, Point::new(3000.0, 4000.0)));
         let walls = &h.project().walls;
         assert_eq!(walls.len(), 2);
         assert_eq!(walls[1].start, Point::new(3000.0, 0.0), "chained");
-        assert_eq!(walls[1].end, Point::new(3000.0, 4000.0), "typed length");
+        assert_eq!(walls[1].end, Point::new(3000.0, 4000.0));
         h.undo()?;
         assert_eq!(h.project().walls.len(), 1, "undo removes the last wall");
         Ok(())
@@ -632,26 +523,6 @@ mod tests {
             "quarter, anticlockwise"
         );
         assert!(close(w.end, Point::new(0.0, 1000.0)), "on the circle");
-        Ok(())
-    }
-
-    #[test]
-    fn a_typed_angle_sets_the_direction_with_or_without_a_length() -> Result {
-        let (mut h, mut tool) = setup()?;
-        tool.method = WallMethod::Single;
-        tool.click(&mut h, Point::new(0.0, 0.0));
-        "2000<90".chars().for_each(|c| tool.type_char(c));
-        assert_eq!(tool.typed(), "2000 < 90°");
-        assert!(tool.enter(&mut h, Some(Point::new(500.0, 0.0))));
-        assert!(close(h.project().walls[0].end, Point::new(0.0, 2000.0)));
-        // An angle alone: the pointer gives the length along it.
-        tool.click(&mut h, Point::new(0.0, 0.0));
-        tool.switch_field();
-        "-45".chars().for_each(|c| tool.type_char(c));
-        assert!(tool.click(&mut h, Point::new(1000.0, 0.0)));
-        let end = h.project().walls[1].end;
-        // The pointer at 1000 east, projected on the 45 degrees south-east.
-        assert!(close(end, Point::new(500.0, -500.0)), "{end:?}");
         Ok(())
     }
 
