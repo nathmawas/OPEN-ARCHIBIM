@@ -425,6 +425,16 @@ impl History {
         &self.project
     }
 
+    /// Whether there is a command to undo.
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    /// Whether there is an undone command to redo.
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
     /// A new identifier for an element to be added.
     pub fn new_id(&mut self) -> Id {
         self.project.new_id()

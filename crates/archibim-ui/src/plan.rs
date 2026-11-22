@@ -61,6 +61,18 @@ impl PlanView {
         self.scale
     }
 
+    /// Fits the drawing in the view the next time it is shown.
+    pub fn refit(&mut self) {
+        self.scale = 0.0;
+    }
+
+    /// Zooms in by `factor` around the middle of the view, or out below 1.
+    pub fn zoom(&mut self, factor: f32) {
+        if self.scale > 0.0 {
+            self.scale = (self.scale * factor).clamp(1e-4, 50.0);
+        }
+    }
+
     /// Middle or right drag pans, the wheel zooms around the pointer, Home
     /// fits the drawing.
     pub fn navigate(&mut self, ui: &Ui, response: &Response, plan: &[LayerPlan]) {

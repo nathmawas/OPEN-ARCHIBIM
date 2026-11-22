@@ -52,6 +52,16 @@ impl ModelView {
         }
     }
 
+    /// Shows the whole model.
+    pub fn fit(&mut self) {
+        self.camera.fit(&self.scene);
+    }
+
+    /// Moves closer by `factor`, or away below 1.
+    pub fn zoom(&mut self, factor: f32) {
+        self.camera.distance /= factor;
+    }
+
     /// Whether the scene was coloured for another selection.
     pub fn stale(&self, selection: Option<Id>) -> bool {
         self.scene.generation == 0 || self.coloured_for != selection

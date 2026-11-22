@@ -34,6 +34,9 @@ pub use wall_tool::{WallMethod, WallTool};
 /// for that point to become the reference, in seconds.
 const REST: f64 = 0.4;
 
+/// How much one press of the zoom buttons zooms.
+const ZOOM: f32 = 1.25;
+
 /// Snapping distance to existing points, in screen pixels.
 const SNAP_PX: f32 = 10.0;
 
@@ -174,6 +177,16 @@ pub struct Workspace {
     reference_auto: bool,
     /// The point the pointer rests on, and since when.
     resting: Option<(Point, f64)>,
+    /// The tools panel on the left is shown.
+    show_tools: bool,
+    /// The settings panel on the right is shown.
+    show_settings: bool,
+    /// Where the next point goes, under the pointer in the plan.
+    pointer: Option<Point>,
+    /// Quitting was asked for while the project has changes.
+    ask_quit: bool,
+    /// Quitting without saving was confirmed.
+    quit: bool,
 }
 
 impl Workspace {
@@ -205,7 +218,18 @@ impl Workspace {
             reference: None,
             reference_auto: false,
             resting: None,
+            show_tools: true,
+            show_settings: true,
+            pointer: None,
+            ask_quit: false,
+            quit: false,
         }
+    }
+
+    /// Lets the window close without asking, for the pictures the
+    /// application takes of itself.
+    pub fn quit_without_asking(&mut self) {
+        self.quit = true;
     }
 
     /// Selects an element, as a click with the selection tool would, or
@@ -262,18 +286,33 @@ impl Workspace {
     /// Shows the whole workspace. Returns true when the project changed.
     pub fn show(&mut self, ui: &mut Ui, history: &mut History, plan: &[LayerPlan]) -> bool {
         let mut changed = false;
-        egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
-        egui::Panel::right("properties").show(ui, |ui| {
-            if self.selection.is_none() && self.tool != Tool::Select {
-                if let Some(command) = self.settings(ui, history.project()) {
-                    changed |= self.run(history, command);
-                }
-            } else if let Some(command) =
-                self.properties.show(ui, history.project(), self.selection)
-            {
-                changed |= self.run(history, command);
-            }
+        self.quitting(ui, history);
+        egui::Panel::top("menu").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| changed |= self.menu(ui, history));
         });
+        if self.show_tools {
+            egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
+        }
+        if self.show_settings {
+            egui::Panel::right("properties").show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if self.selection.is_none() && self.tool != Tool::Select {
+                        if let Some(command) = self.settings(ui, history.project()) {
+                            changed |= self.run(history, command);
+                        }
+                    } else if let Some(command) =
+                        self.properties.show(ui, history.project(), self.selection)
+                    {
+                        changed |= self.run(history, command);
+                    }
+                    ui.separator();
+                    egui::CollapsingHeader::new(t("snap.title"))
+                        .default_open(true)
+                        .show(ui, |ui| self.aids(ui));
+                });
+            });
+        }
+        egui::Panel::bottom("display").show(ui, |ui| self.display(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             let pending = match (&self.halfway, self.reference) {
                 (Some(h), _) if h.is_empty() => Some(t("halfway.first")),
@@ -295,10 +334,16 @@ impl Workspace {
                 Tool::Select => "",
                 _ => t("draw.hint"),
             };
-            ui.label(match (pending, self.message.as_deref()) {
-                (Some(pending), _) => pending,
-                (None, Some(message)) => message,
-                (None, None) => hint,
+            ui.horizontal_wrapped(|ui| {
+                if let Some(p) = self.pointer {
+                    ui.monospace(format!("x {:>8.0}  y {:>8.0}", p.x, p.y));
+                    ui.separator();
+                }
+                ui.label(match (pending, self.message.as_deref()) {
+                    (Some(pending), _) => pending,
+                    (None, Some(message)) => message,
+                    (None, None) => hint,
+                });
             });
         });
         if self.dirty || self.model.stale(self.selection) {
@@ -308,6 +353,7 @@ impl Workspace {
         egui::CentralPanel::default().show(ui, |ui| match self.layout {
             Layout::Plan => changed |= self.plan(ui, history, plan),
             Layout::Model => {
+                self.pointer = None;
                 let typing = ui.ctx().memory(|m| m.focused().is_some());
                 changed |= !typing && self.keys(ui, history, plan, None, None, 0.0);
                 self.model.show(ui);
@@ -330,32 +376,211 @@ impl Workspace {
         changed
     }
 
+    /// The menu bar. Returns true when the project changed.
+    fn menu(&mut self, ui: &mut Ui, history: &mut History) -> bool {
+        let ctx = ui.ctx().clone();
+        let keys =
+            |modifiers, key| ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
+        let (ctrl, shift) = (Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT);
+        let item = |key, shortcut: String| egui::Button::new(t(key)).shortcut_text(shortcut);
+        let mut changed = false;
+        ui.menu_button(t("menu.file"), |ui| {
+            // ponytail: nothing is saved yet (V1.0); the entries show where
+            // it will be.
+            for (key, shortcut) in [
+                ("menu.new", keys(ctrl, Key::N)),
+                ("menu.open", keys(ctrl, Key::O)),
+                ("menu.save", keys(ctrl, Key::S)),
+                ("menu.save_as", keys(shift, Key::S)),
+                ("menu.export_ifc", String::new()),
+            ] {
+                ui.add_enabled(false, item(key, shortcut))
+                    .on_disabled_hover_text(t("menu.not_yet"));
+            }
+            ui.separator();
+            if ui.add(item("menu.quit", keys(ctrl, Key::Q))).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+        ui.menu_button(t("menu.edit"), |ui| {
+            if ui
+                .add_enabled(history.can_undo(), item("menu.undo", keys(ctrl, Key::Z)))
+                .clicked()
+            {
+                changed |= self.undo(history, false);
+            }
+            if ui
+                .add_enabled(history.can_redo(), item("menu.redo", keys(ctrl, Key::Y)))
+                .clicked()
+            {
+                changed |= self.undo(history, true);
+            }
+            ui.separator();
+            let delete = item("menu.delete", keys(Modifiers::NONE, Key::Delete));
+            if ui.add_enabled(self.selection.is_some(), delete).clicked() {
+                changed |= self.delete(history);
+            }
+        });
+        ui.menu_button(t("menu.view"), |ui| {
+            if ui
+                .add(item("view.fit", keys(Modifiers::NONE, Key::Home)))
+                .clicked()
+            {
+                self.fit();
+            }
+            if ui.button(t("view.zoom_in")).clicked() {
+                self.zoom(ZOOM);
+            }
+            if ui.button(t("view.zoom_out")).clicked() {
+                self.zoom(1.0 / ZOOM);
+            }
+            ui.separator();
+            self.layouts(ui);
+            ui.separator();
+            ui.checkbox(&mut self.show_guides, t("snap.placed"));
+            ui.checkbox(&mut self.show_tools, t("view.tools"));
+            ui.checkbox(&mut self.show_settings, t("view.settings"));
+        });
+        ui.menu_button(t("menu.help"), |ui| {
+            if ui.button(t("menu.about")).clicked() {
+                self.message = Some(format!("{} {}", t("about.text"), env!("CARGO_PKG_VERSION")));
+            }
+        });
+        changed
+    }
+
+    /// Closing the window while the project has changes asks first:
+    /// nothing is saved yet.
+    fn quitting(&mut self, ui: &Ui, history: &History) {
+        if ui.input(|i| i.viewport().close_requested()) && !self.quit && history.can_undo() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.ask_quit = true;
+        }
+        if !self.ask_quit {
+            return;
+        }
+        let modal = egui::Modal::new(egui::Id::unique("quit")).show(ui.ctx(), |ui| {
+            ui.label(t("quit.unsaved"));
+            ui.horizontal(|ui| {
+                if ui.button(t("quit.anyway")).clicked() {
+                    self.quit = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button(t("quit.cancel")).clicked() {
+                    self.ask_quit = false;
+                }
+            });
+        });
+        if modal.should_close() {
+            self.ask_quit = false;
+        }
+    }
+
+    /// Undoes the last command, or redoes the last undone one.
+    fn undo(&mut self, history: &mut History, redo: bool) -> bool {
+        self.stop();
+        let done = if redo { history.redo() } else { history.undo() };
+        matches!(done, Ok(Some(_)))
+    }
+
+    /// Deletes the selected element.
+    fn delete(&mut self, history: &mut History) -> bool {
+        match self
+            .selection
+            .and_then(|id| Element::find(history.project(), id))
+        {
+            Some(element) => self.run(history, element.remove()),
+            None => false,
+        }
+    }
+
+    /// Shows the whole drawing, in the plan and in 3D.
+    fn fit(&mut self) {
+        self.view.refit();
+        self.model.fit();
+    }
+
+    fn zoom(&mut self, factor: f32) {
+        self.view.zoom(factor);
+        self.model.zoom(factor);
+    }
+
+    fn layouts(&mut self, ui: &mut Ui) {
+        for (layout, key) in [
+            (Layout::Plan, "view.plan"),
+            (Layout::Model, "view.model"),
+            (Layout::Both, "view.both"),
+        ] {
+            ui.selectable_value(&mut self.layout, layout, t(key));
+        }
+    }
+
+    /// The display bar at the bottom: what the middle shows, and how close.
+    fn display(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            self.layouts(ui);
+            ui.separator();
+            if ui.button(t("view.fit")).clicked() {
+                self.fit();
+            }
+            if ui.button("-").on_hover_text(t("view.zoom_out")).clicked() {
+                self.zoom(1.0 / ZOOM);
+            }
+            if ui.button("+").on_hover_text(t("view.zoom_in")).clicked() {
+                self.zoom(ZOOM);
+            }
+            if self.layout != Layout::Model
+                && let Some(n) = screen_scale(self.view.scale())
+            {
+                ui.label(format!("{} 1:{n}", t("view.screen_scale")))
+                    .on_hover_text(t("view.screen_scale_hint"));
+            }
+            ui.separator();
+            ui.checkbox(&mut self.show_guides, t("snap.placed"));
+        });
+    }
+
+    /// The tools, in groups: selection, the elements of the model, guides.
+    // ponytail: labels only; icons come with the catalogue (ADR 0004).
     fn tools(&mut self, ui: &mut Ui) {
         let before = self.tool;
-        for (tool, key) in [
-            (Tool::Select, "tool.select"),
-            (Tool::Wall, "tool.wall"),
-            (Tool::Slab, "tool.slab"),
-            (Tool::Column, "tool.column"),
-            (Tool::Beam, "tool.beam"),
-            (Tool::Opening, "tool.opening"),
-            (Tool::Roof, "tool.roof"),
-            (Tool::Stair, "tool.stair"),
-            (Tool::Mesh, "tool.mesh"),
-            (Tool::Guide, "tool.guide"),
-        ] {
-            ui.selectable_value(&mut self.tool, tool, t(key));
-        }
-        if self.tool == Tool::Opening {
-            ui.separator();
-            ui.selectable_value(&mut self.door, false, t("preset.window"));
-            ui.selectable_value(&mut self.door, true, t("preset.door"));
+        let groups: [&[(Tool, &str)]; 3] = [
+            &[(Tool::Select, "tool.select")],
+            &[
+                (Tool::Wall, "tool.wall"),
+                (Tool::Column, "tool.column"),
+                (Tool::Beam, "tool.beam"),
+                (Tool::Slab, "tool.slab"),
+                (Tool::Roof, "tool.roof"),
+                (Tool::Stair, "tool.stair"),
+                (Tool::Opening, "tool.opening"),
+                (Tool::Mesh, "tool.mesh"),
+            ],
+            &[(Tool::Guide, "tool.guide")],
+        ];
+        for (i, group) in groups.into_iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for &(tool, key) in group {
+                ui.selectable_value(&mut self.tool, tool, t(key));
+                if tool == Tool::Opening && self.tool == Tool::Opening {
+                    ui.indent("opening", |ui| {
+                        ui.selectable_value(&mut self.door, false, t("preset.window"));
+                        ui.selectable_value(&mut self.door, true, t("preset.door"));
+                    });
+                }
+            }
         }
         if self.tool != before {
             self.stop();
         }
-        ui.separator();
-        ui.label(t("snap.title"));
+    }
+
+    /// The drawing aids: what the pointer snaps to, and the points placed
+    /// from others.
+    fn aids(&mut self, ui: &mut Ui) {
         let o = &mut self.snap_options;
         for (on, key) in [
             (&mut o.points, "snap.points"),
@@ -365,7 +590,6 @@ impl Workspace {
             (&mut o.angles, "snap.angles"),
             (&mut o.alignments, "snap.alignments"),
             (&mut o.guides, "snap.guides"),
-            (&mut self.show_guides, "snap.placed"),
         ] {
             ui.checkbox(on, t(key));
         }
@@ -401,14 +625,6 @@ impl Workspace {
                 .clicked()
         {
             self.ask_reference();
-        }
-        ui.separator();
-        for (layout, key) in [
-            (Layout::Plan, "view.plan"),
-            (Layout::Model, "view.model"),
-            (Layout::Both, "view.both"),
-        ] {
-            ui.selectable_value(&mut self.layout, layout, t(key));
         }
     }
 
@@ -659,6 +875,7 @@ impl Workspace {
         if let Some(p) = cursor {
             self.wall.hover(p);
         }
+        self.pointer = cursor;
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
         let mut changed = !typing && self.keys(ui, history, plan, snapped.as_ref(), from, base);
@@ -992,24 +1209,22 @@ impl Workspace {
     ) -> bool {
         let drawing = self.tool != Tool::Select;
         let snap = f64::from(SNAP_PX / self.view.scale());
-        let (undo, redo, delete) = ui.input_mut(|i| {
+        let (undo, redo, delete, quit) = ui.input_mut(|i| {
             let redo = i.consume_key(Modifiers::COMMAND, Key::Y)
                 || i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
             let undo = i.consume_key(Modifiers::COMMAND, Key::Z);
-            (undo, redo, i.key_pressed(Key::Delete))
+            let quit = i.consume_key(Modifiers::COMMAND, Key::Q);
+            (undo, redo, i.key_pressed(Key::Delete), quit)
         });
         let mut changed = false;
         if undo || redo {
-            self.stop();
-            let done = if undo { history.undo() } else { history.redo() };
-            changed |= matches!(done, Ok(Some(_)));
+            changed |= self.undo(history, redo);
         }
-        if delete
-            && let Some(element) = self
-                .selection
-                .and_then(|id| Element::find(history.project(), id))
-        {
-            changed |= self.run(history, element.remove());
+        if delete {
+            changed |= self.delete(history);
+        }
+        if quit {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         let events = ui.input(|i| i.events.clone());
         for event in events {
@@ -1070,6 +1285,20 @@ impl Workspace {
         }
         changed
     }
+}
+
+/// The scale the plan shows at on screen, 1:N, from the view's zoom in
+/// screen points per millimetre, rounded to two figures; none before the
+/// view is fitted. Not the drawing's scale.
+// ponytail: takes a screen point as 1/96 inch, as the system's display
+// scaling means it; measure the screen if architects find it off.
+fn screen_scale(points_per_mm: f32) -> Option<u32> {
+    if points_per_mm <= 0.0 {
+        return None;
+    }
+    let n = 96.0 / 25.4 / points_per_mm;
+    let unit = 10f32.powf(n.log10().floor() - 1.0).max(1.0);
+    Some(((n / unit).round() * unit) as u32)
 }
 
 /// The reference after B: a reference to pick, or none if one was asked
@@ -1216,6 +1445,18 @@ fn wall_at(project: &Project, plan: &[LayerPlan], p: Point) -> Option<(Id, f64, 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_screen_scale_reads_as_a_rounded_one_to_n() {
+        use super::screen_scale;
+        // 1:100: 1 mm of the model is 1/100 mm on screen, 96 points to 25.4 mm.
+        let at = |n: f32| screen_scale(96.0 / 25.4 / n);
+        assert_eq!(at(100.0), Some(100));
+        assert_eq!(at(52.0), Some(52));
+        assert_eq!(at(1234.0), Some(1200));
+        assert_eq!(at(3.0), Some(3));
+        assert_eq!(screen_scale(0.0), None, "not fitted yet");
+    }
+
     #[test]
     fn b_asks_for_a_reference_or_drops_the_one_asked_for() {
         use super::asked_reference;

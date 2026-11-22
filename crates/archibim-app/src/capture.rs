@@ -201,6 +201,7 @@ impl Capture {
                 }
                 Ok(Err(e)) => {
                     eprintln!("{e}");
+                    workspace.quit_without_asking();
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 Err(_) => {}
@@ -208,6 +209,7 @@ impl Capture {
             return;
         }
         let Some(shot) = self.shots.get(self.next) else {
+            workspace.quit_without_asking();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         };
