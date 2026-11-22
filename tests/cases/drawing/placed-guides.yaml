@@ -1,0 +1,47 @@
+id: placed-guides
+title: Guides placed by hand stay on the plan, and a point is measured from a reference
+status: proposed
+given: |
+  A plan with a straight wall from (0, 0) to (6000, 0) on the ground floor.
+  The architect picks the guide tool.
+when: |
+  The architect places a line through two points, a line parallel to the
+  wall at a typed distance, and a circle, then draws with the other tools
+  against them, and places a point from a reference point.
+expect:
+  - Line through two points - two clicks place a guide line through them,
+    drawn dashed across the whole plan. Typed length and angle work as for
+    a wall, so a guide can run at a precise angle.
+  - Parallel to an edge - a click on the wall's face picks it; the pointer
+    then shows the parallel line on its side, and 1200 typed places it
+    1200 from that face; a click places it where the pointer is.
+  - Circle - a click places the centre, then a click on the circle or a
+    typed radius (Enter) places it.
+  - Each guide is one undo step; it belongs to the story drawn on and is
+    kept with the project.
+  - With any drawing tool, the pointer lands on the guides, on their
+    crossings with each other, with the edges and with curved walls, and
+    on the centre of a circle; from the last point, directions parallel
+    to a guide line, and the tangent and the point square to a circle.
+  - A checkbox in the drawing aids hides the guides; hidden guides do not
+    snap and cannot be selected.
+  - With the selection tool, a click on a guide selects it; Delete removes
+    it; a circle's radius can be changed in the palette. A button of the
+    guide tool clears every guide of the story in one undo step; it is
+    greyed out when there is none.
+  - A story that still has guides is not removed by the model; removing
+    a story from the interface will remove its guides first, in the same
+    undo step.
+  - Guides are never in the 3D view, in quantities or on a print.
+  - Reference point - the key B, or its button in the drawing aids, then a
+    click on a point, marks it with a cross. Typed length and angle then
+    measure from it (the angle from the x axis), shown with a dashed line
+    to the pointer; a click or Enter places the point, and the reference
+    is forgotten. A wall being drawn still runs from its own last point.
+    The status bar says what to do; Escape cancels it after clearing what
+    was typed.
+  - Not yet - a horizontal or vertical guide placed in one gesture
+    (T-square), a length carried over from one place to another with the
+    compass, a guide through a point at an angle to a picked edge, a
+    bisector, guides of other stories shown apart, a count of guides in
+    the status bar, saving guides in the IFC file.

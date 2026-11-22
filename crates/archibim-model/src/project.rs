@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::{
-    Beam, Column, Layer, LevelKind, LevelRef, Mesh, Opening, Point, Roof, Slab, Stair, Story, Wall,
+    Beam, Column, Guide, GuideShape, Layer, LevelKind, LevelRef, Mesh, Opening, Point, Roof, Slab,
+    Stair, Story, Wall,
 };
 
 /// Permanent identifier of anything in the project.
@@ -74,6 +75,8 @@ pub struct Project {
     pub meshes: Vec<Mesh>,
     /// Stairs.
     pub stairs: Vec<Stair>,
+    /// Guides placed by hand, to draw against.
+    pub guides: Vec<Guide>,
     junctions: Vec<(Id, Id, JunctionMode)>,
 }
 
@@ -121,6 +124,7 @@ impl Project {
     find!(roof, roof_mut, roofs, Roof);
     find!(mesh, mesh_mut, meshes, Mesh);
     find!(stair, stair_mut, stairs, Stair);
+    find!(guide, guide_mut, guides, Guide);
 
     fn check_free(&mut self, id: Id) -> Result<(), ModelError> {
         let used = self.stories.iter().any(|e| e.id == id)
@@ -132,7 +136,8 @@ impl Project {
             || self.beams.iter().any(|e| e.id == id)
             || self.roofs.iter().any(|e| e.id == id)
             || self.meshes.iter().any(|e| e.id == id)
-            || self.stairs.iter().any(|e| e.id == id);
+            || self.stairs.iter().any(|e| e.id == id)
+            || self.guides.iter().any(|e| e.id == id);
         if used {
             return Err(ModelError::Invalid("identifier already used"));
         }
@@ -432,6 +437,50 @@ impl Project {
         Ok(self.slabs.remove(at))
     }
 
+    /// Adds a guide. Its story must exist, the two points of a line must
+    /// differ and a circle needs a radius.
+    pub fn insert_guide(&mut self, guide: Guide) -> Result<(), ModelError> {
+        self.check_free(guide.id)?;
+        self.check_guide(&guide)?;
+        self.guides.push(guide);
+        Ok(())
+    }
+
+    /// Replaces a guide with a new state of itself. Returns the previous one.
+    pub fn replace_guide(&mut self, guide: Guide) -> Result<Guide, ModelError> {
+        self.check_guide(&guide)?;
+        Ok(std::mem::replace(self.guide_mut(guide.id)?, guide))
+    }
+
+    fn check_guide(&self, guide: &Guide) -> Result<(), ModelError> {
+        self.story(guide.story)?;
+        let valid = match guide.shape {
+            GuideShape::Line { a, b } => {
+                let d = (b.x - a.x).hypot(b.y - a.y);
+                d.is_finite() && d > 1e-9
+            }
+            GuideShape::Circle { centre, radius } => {
+                centre.x.is_finite() && centre.y.is_finite() && radius.is_finite() && radius > 0.0
+            }
+        };
+        if !valid {
+            return Err(ModelError::Invalid(
+                "a guide needs two distinct points or a radius",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes a guide.
+    pub fn remove_guide(&mut self, id: Id) -> Result<Guide, ModelError> {
+        let at = self
+            .guides
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ModelError::NotFound(id))?;
+        Ok(self.guides.remove(at))
+    }
+
     /// Removes a column.
     pub fn remove_column(&mut self, id: Id) -> Result<Column, ModelError> {
         let at = self
@@ -481,9 +530,12 @@ impl Project {
             || self
                 .stairs
                 .iter()
-                .any(|s| s.story == id || s.bottom.story == id || s.top.story == id);
+                .any(|s| s.story == id || s.bottom.story == id || s.top.story == id)
+            || self.guides.iter().any(|g| g.story == id);
         if used {
-            return Err(ModelError::Invalid("walls still refer to this story"));
+            return Err(ModelError::Invalid(
+                "elements or guides still refer to this story",
+            ));
         }
         let at = self
             .stories

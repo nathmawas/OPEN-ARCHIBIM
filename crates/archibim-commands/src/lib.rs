@@ -3,7 +3,7 @@
 //! and the elements it changed.
 
 use archibim_model::{
-    Beam, Column, Id, JunctionMode, Layer, Material, Mesh, ModelError, Opening, OpeningKind,
+    Beam, Column, Guide, Id, JunctionMode, Layer, Material, Mesh, ModelError, Opening, OpeningKind,
     Operation, Part, Project, Roof, Slab, Stair, Story, Wall,
 };
 
@@ -95,6 +95,12 @@ pub enum Command {
     RemoveSlab(Id),
     /// Replaces a slab with a new state of itself, same identifier.
     ReplaceSlab(Slab),
+    /// Adds a guide to draw against.
+    AddGuide(Guide),
+    /// Removes a guide.
+    RemoveGuide(Id),
+    /// Replaces a guide with a new state of itself, same identifier.
+    ReplaceGuide(Guide),
     /// Adds a column.
     AddColumn(Column),
     /// Removes a column.
@@ -295,6 +301,16 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
         ReplaceSlab(new) => {
             let id = new.id;
             applied(ReplaceSlab(project.replace_slab(new)?), vec![id])
+        }
+        AddGuide(guide) => {
+            let id = guide.id;
+            project.insert_guide(guide)?;
+            applied(RemoveGuide(id), vec![id])
+        }
+        RemoveGuide(id) => applied(AddGuide(project.remove_guide(id)?), vec![id]),
+        ReplaceGuide(new) => {
+            let id = new.id;
+            applied(ReplaceGuide(project.replace_guide(new)?), vec![id])
         }
         AddColumn(column) => {
             let id = column.id;

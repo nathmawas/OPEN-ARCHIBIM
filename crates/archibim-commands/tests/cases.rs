@@ -10,10 +10,10 @@ use archibim_geometry::{
     model_prisms, plan_layers, polygon_area, roof_blocks, roof_faces, roof_overhang, stair_steps,
 };
 use archibim_model::{
-    Align, Anchor, Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind,
-    LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part,
-    Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story,
-    Wall, WallReference,
+    Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, JunctionMode, Layer,
+    LayerRole, LevelKind, LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind,
+    Operation, Part, Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane,
+    Slab, Stair, Story, Wall, WallReference,
 };
 
 use std::f64::consts::FRAC_PI_2;
@@ -1545,5 +1545,84 @@ fn stairs_walking_line() -> Result {
     assert!(f.h.run(Command::AddStair(bad)).is_err());
     stair.width = 0.0;
     assert!(f.h.run(Command::AddStair(stair)).is_err());
+    Ok(())
+}
+
+#[test]
+fn guides_are_added_edited_cleared_and_undone() -> Result {
+    let mut f = Fixture::new()?;
+    let line = GuideShape::Line {
+        a: Point::new(0.0, 0.0),
+        b: Point::new(1000.0, 0.0),
+    };
+    let circle = GuideShape::Circle {
+        centre: Point::new(500.0, 500.0),
+        radius: 300.0,
+    };
+    let (l, c) = (f.h.new_id(), f.h.new_id());
+    let story = f.story0;
+    let guide = |id, shape| Guide { id, story, shape };
+    let (gl, gc) = (guide(l, line), guide(c, circle));
+    assert_eq!(f.h.run(Command::AddGuide(gl.clone()))?, vec![l]);
+    f.h.run(Command::AddGuide(gc.clone()))?;
+    let two = f.h.project().clone();
+    // Edit, then undo and redo the edit.
+    let moved = Guide {
+        shape: GuideShape::Circle {
+            centre: Point::new(0.0, 0.0),
+            radius: 50.0,
+        },
+        ..gc.clone()
+    };
+    assert_eq!(f.h.run(Command::ReplaceGuide(moved.clone()))?, vec![c]);
+    assert_eq!(f.h.project().guide(c)?, &moved);
+    f.h.undo()?;
+    assert_eq!(f.h.project(), &two);
+    f.h.redo()?;
+    assert_eq!(f.h.project().guide(c)?, &moved);
+    f.h.undo()?;
+    // A refused command changes nothing.
+    let bad = Guide {
+        shape: GuideShape::Circle {
+            centre: Point::new(0.0, 0.0),
+            radius: 0.0,
+        },
+        ..gc.clone()
+    };
+    assert!(f.h.run(Command::ReplaceGuide(bad)).is_err());
+    assert!(f.h.run(Command::AddGuide(gl.clone())).is_err(), "same id");
+    assert!(f.h.run(Command::RemoveGuide(Id(9999))).is_err());
+    // The story keeps its guides.
+    assert!(f.h.run(Command::RemoveStory(f.story0)).is_err());
+    assert_eq!(f.h.project(), &two);
+    // Clearing the story's guides is one undo step.
+    f.h.run(Command::Group(vec![
+        Command::RemoveGuide(l),
+        Command::RemoveGuide(c),
+    ]))?;
+    assert!(f.h.project().guides.is_empty());
+    f.h.undo()?;
+    // Identifiers kept; a restored guide goes back at the end of the list,
+    // as for every other element.
+    let mut back = f.h.project().guides.clone();
+    back.sort_by_key(|g| g.id.0);
+    assert_eq!(back, two.guides);
+    // A group that fails half way is rolled back whole.
+    let after = f.h.project().clone();
+    let r = f.h.run(Command::Group(vec![
+        Command::RemoveGuide(l),
+        Command::RemoveGuide(Id(9999)),
+    ]));
+    assert!(r.is_err());
+    assert_eq!(f.h.project(), &after);
+    // The two additions undo and redo one after the other.
+    f.h.undo()?;
+    f.h.undo()?;
+    assert!(f.h.project().guides.is_empty());
+    f.h.redo()?;
+    f.h.redo()?;
+    let mut back = f.h.project().guides.clone();
+    back.sort_by_key(|g| g.id.0);
+    assert_eq!(back, two.guides);
     Ok(())
 }

@@ -4,7 +4,7 @@ use archibim_geometry::{
     LayerPlan, beam_outline, column_outline, mesh_contours, opening_outline, roof_faces,
     stair_steps, triangulate, visible_edges,
 };
-use archibim_model::{Id, LayerRole, Point, Project, Stair, Wall};
+use archibim_model::{GuideShape, Id, LayerRole, Point, Project, Stair, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
 use crate::{Snap, SnapKind, WallTool};
@@ -12,6 +12,10 @@ use crate::{Snap, SnapKind, WallTool};
 const INK: Color32 = Color32::from_gray(40);
 /// Colour of drawing guides.
 const GUIDE: Color32 = Color32::from_rgb(220, 90, 40);
+/// Colour of the guides placed by hand.
+pub(crate) const PLACED: Color32 = Color32::from_rgb(0, 150, 140);
+/// Colour of the reference point that typed values measure from.
+const REFERENCE: Color32 = Color32::from_rgb(140, 60, 170);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
 /// Fill of terrain meshes in plan.
@@ -490,6 +494,57 @@ impl PlanView {
 }
 
 impl PlanView {
+    /// A guide placed by hand, dashed: a line across the whole view, or a
+    /// circle.
+    pub(crate) fn guide(&self, painter: &Painter, shape: &GuideShape, stroke: Stroke) {
+        let points: Vec<Pos2> = match *shape {
+            GuideShape::Line { a, b } => {
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let l = dx.hypot(dy);
+                if l <= 0.0 || self.scale <= 0.0 {
+                    return;
+                }
+                let (ux, uy) = (dx / l, dy / l);
+                // From the point of the line nearest the middle of the view,
+                // half the view's diagonal each way.
+                let c = self.model(self.rect.center());
+                let t = (c.x - a.x) * ux + (c.y - a.y) * uy;
+                let half = f64::from(self.rect.size().length() / 2.0 / self.scale);
+                let at = |s: f64| self.screen(Point::new(a.x + ux * s, a.y + uy * s));
+                vec![at(t - half), at(t + half)]
+            }
+            GuideShape::Circle { centre, radius } => (0..=96)
+                .map(|i| {
+                    let a = f64::from(i) * std::f64::consts::TAU / 96.0;
+                    self.screen(Point::new(
+                        centre.x + radius * a.cos(),
+                        centre.y + radius * a.sin(),
+                    ))
+                })
+                .collect(),
+        };
+        painter.extend(Shape::dashed_line(&points, stroke, 10.0, 5.0));
+    }
+
+    /// The reference point that typed values measure from: a cross, and a
+    /// dashed line to the point `p` about to be placed.
+    pub(crate) fn reference(&self, painter: &Painter, r: Point, p: Option<Point>) {
+        let c = self.screen(r);
+        let mark = Stroke::new(1.5, REFERENCE);
+        let k = 6.0;
+        painter.line_segment([c + Vec2::splat(-k), c + Vec2::splat(k)], mark);
+        painter.line_segment([c + Vec2::new(-k, k), c + Vec2::new(k, -k)], mark);
+        painter.circle_stroke(c, k, mark);
+        if let Some(p) = p {
+            painter.extend(Shape::dashed_line(
+                &[c, self.screen(p)],
+                Stroke::new(1.0, REFERENCE),
+                6.0,
+                4.0,
+            ));
+        }
+    }
+
     /// Next to the point `p` about to be placed, `label`: what was typed
     /// or the length and angle from the last point, in the warning colour
     /// when `warn` (typed values that give no point). While picking two

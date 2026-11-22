@@ -10,10 +10,13 @@
 //! point placed the points where a line touches the arc (tangent) or meets
 //! it square (through the centre).
 //!
+//! Guides placed by hand snap the same way: their lines like the guide
+//! lines of picked edges, their circles like arcs, with their crossings.
+//!
 //! Pure logic: the plan view draws the result.
 
 use archibim_geometry::{beam_outline, column_outline};
-use archibim_model::{Point, Project};
+use archibim_model::{GuideShape, Point, Project};
 
 /// How many edges stay picked up.
 pub const PICKED_EDGES: usize = 2;
@@ -191,6 +194,8 @@ pub struct Scene {
     segments: Vec<(Point, Point)>,
     picked: Vec<(Point, Point)>,
     arcs: Vec<Arc>,
+    /// Lines of the guides placed by hand.
+    placed: Vec<Line>,
 }
 
 impl Scene {
@@ -285,6 +290,55 @@ impl Scene {
             .extend((0..n).map(|i| (outline[i], outline[(i + 1) % n])));
     }
 
+    /// Adds the guides placed by hand, with where they cross the edges,
+    /// the arcs and each other.
+    // ponytail: crossings with every edge, rebuilt each frame like the rest
+    // of the scene; cache them when guides or the project change if large
+    // projects break the frame budget.
+    pub fn place_guides(&mut self, guides: &[GuideShape]) {
+        for g in guides {
+            if let GuideShape::Circle { centre, radius } = *g {
+                let circle = Arc {
+                    centre,
+                    radius,
+                    from: 0.0,
+                    sweep: std::f64::consts::TAU,
+                };
+                for &(a, b) in &self.segments {
+                    let Some(u) = unit(sub(b, a)) else { continue };
+                    let length = distance(a, b);
+                    for s in circle_cross(a, u, &circle) {
+                        if (-1e-9..=length + 1e-9).contains(&s) {
+                            self.intersections.push(add(a, mul(u, s)));
+                        }
+                    }
+                }
+                for arc in &self.arcs {
+                    self.intersections.extend(circle_circle(&circle, arc));
+                }
+                self.points.push(centre);
+                self.arcs.push(circle);
+            }
+        }
+        for g in guides {
+            let GuideShape::Line { a, b } = *g else {
+                continue;
+            };
+            let Some(u) = unit(sub(b, a)) else { continue };
+            for &(c, d) in &self.segments {
+                if let Some(s) = line_cross(a, u, c, d) {
+                    self.intersections.push(add(a, mul(u, s)));
+                }
+            }
+            for arc in &self.arcs {
+                let found = circle_cross(a, u, arc);
+                self.intersections
+                    .extend(found.into_iter().map(|s| add(a, mul(u, s))));
+            }
+            self.placed.push(Line { anchors: [a, b], u });
+        }
+    }
+
     /// Sets the edges picked up so far, most recent first.
     pub fn pick(&mut self, edges: &[(Point, Point)]) {
         self.picked = edges.to_vec();
@@ -336,11 +390,12 @@ impl Scene {
         tolerance: f64,
     ) -> Snap {
         let free = |kind, point| Snap::new(point, kind, Vec::new());
-        let lines = if options.guides {
+        let mut lines = if options.guides {
             self.lines()
         } else {
             Vec::new()
         };
+        lines.extend(&self.placed);
         if !shift {
             if let Some(s) = self.on_point(options, p, tolerance) {
                 return s;
@@ -532,7 +587,7 @@ impl Scene {
             consider(Point::new(angle.cos(), angle.sin()), SnapKind::Direction);
         }
         if options.guides {
-            for l in self.lines() {
+            for l in self.lines().iter().chain(&self.placed) {
                 consider(l.u, SnapKind::Parallel);
             }
         }
@@ -702,13 +757,35 @@ fn circle_cross(start: Point, u: Point, c: &Arc) -> Vec<f64> {
     let w = sub(start, c.centre);
     let b = dot(u, w);
     let disc = b * b - (dot(w, w) - c.radius * c.radius);
-    if disc < 0.0 {
+    // A line just touching the circle may come out a hair outside.
+    if disc < -1e-9 * c.radius * c.radius {
         return Vec::new();
     }
-    let root = disc.sqrt();
+    let root = disc.max(0.0).sqrt();
     [-b - root, -b + root]
         .into_iter()
         .filter(|s| direction(c.centre, add(start, mul(u, *s))).is_some_and(|a| c.spans(a)))
+        .collect()
+}
+
+/// Where the arcs `c` and `d` cross.
+fn circle_circle(c: &Arc, d: &Arc) -> Vec<Point> {
+    let gap = distance(c.centre, d.centre);
+    if gap < 1e-9 || gap > c.radius + d.radius || gap < (c.radius - d.radius).abs() {
+        return Vec::new();
+    }
+    let along = (gap * gap + c.radius * c.radius - d.radius * d.radius) / (2.0 * gap);
+    let half = (c.radius * c.radius - along * along).max(0.0).sqrt();
+    let u = mul(sub(d.centre, c.centre), 1.0 / gap);
+    let mid = add(c.centre, mul(u, along));
+    let n = Point::new(-u.y, u.x);
+    [add(mid, mul(n, half)), sub(mid, mul(n, half))]
+        .into_iter()
+        .filter(|q| {
+            [c, d]
+                .iter()
+                .all(|arc| direction(arc.centre, *q).is_some_and(|a| arc.spans(a)))
+        })
         .collect()
 }
 
@@ -1410,5 +1487,438 @@ mod tests {
             }
         }
         assert!(s.edge_near(pt(0.0, 0.0), 10.0).is_none());
+    }
+
+    fn line_guide(a: Xy, b: Xy) -> GuideShape {
+        GuideShape::Line {
+            a: pt(a.0, a.1),
+            b: pt(b.0, b.1),
+        }
+    }
+
+    fn circle_guide(centre: Xy, radius: f64) -> GuideShape {
+        GuideShape::Circle {
+            centre: pt(centre.0, centre.1),
+            radius,
+        }
+    }
+
+    fn placed(guides: &[GuideShape]) -> Scene {
+        let mut s = scene(&[], &[]);
+        s.place_guides(guides);
+        s
+    }
+
+    fn finite(r: &Snap) -> bool {
+        r.point.x.is_finite() && r.point.y.is_finite()
+    }
+
+    #[test]
+    fn a_placed_line_snaps_like_the_guide_line_of_an_edge() {
+        // Slope one half: not a multiple of the angle step.
+        let s = placed(&[line_guide((0.0, 0.0), (1000.0, 500.0))]);
+        let o = SnapOptions::default();
+        // On the line, far beyond its two points.
+        let r = s.snap(&o, pt(5000.0, 2504.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Guide, "{r:?}");
+        assert!((r.point.y - r.point.x / 2.0).abs() < 1e-6, "{r:?}");
+        assert!(r.along.is_some(), "a typed length can run along it");
+        // Away from it, free.
+        let r = s.snap(&o, pt(5000.0, 2600.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+        // From a last point: parallel to it.
+        let from = Some(pt(0.0, 3000.0));
+        let r = s.snap(&o, pt(2000.0, 4006.0), from, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Parallel, "{r:?}");
+        assert!(
+            ((r.point.y - 3000.0) / r.point.x - 0.5).abs() < 1e-9,
+            "{r:?}"
+        );
+        // Backwards too.
+        let r = s.snap(&o, pt(-2000.0, 2006.0), from, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Parallel, "{r:?}");
+    }
+
+    #[test]
+    fn placed_lines_cross_each_other_and_the_picked_edges() {
+        let mut s = placed(&[
+            line_guide((0.0, 0.0), (1000.0, 0.0)),
+            line_guide((3000.0, -500.0), (3000.0, 500.0)),
+        ]);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(3004.0, 6.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, 3000.0, 0.0), "{r:?}");
+        // With a picked edge: the crossing of its extension and a placed line.
+        s.pick(&[(pt(0.0, 2000.0), pt(500.0, 2500.0))]);
+        let r = s.snap(&o, pt(3004.0, 5004.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, 3000.0, 5000.0), "{r:?}");
+        // Identical or parallel placed lines never cross.
+        let s = placed(&[
+            line_guide((0.0, 0.0), (1000.0, 0.0)),
+            line_guide((0.0, 0.0), (500.0, 0.0)),
+            line_guide((0.0, 800.0), (1000.0, 800.0)),
+        ]);
+        let r = s.snap(&o, pt(7000.0, 400.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+    }
+
+    #[test]
+    fn placed_lines_stay_snappable_when_the_guide_option_is_off() {
+        // They are drawn by the architect on purpose: only the guides of
+        // picked edges follow the option.
+        let s = placed(&[line_guide((0.0, 0.0), (1000.0, 0.0))]);
+        let off = SnapOptions {
+            guides: false,
+            ..SnapOptions::default()
+        };
+        let r = s.snap(&off, pt(5000.0, 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Guide, "{r:?}");
+        // From a point, the parallel needs the guide option, as for edges.
+        let r = s.snap(&off, pt(2000.0, 3010.0), Some(pt(0.0, 3000.0)), false, 10.0);
+        assert_ne!(r.kind, SnapKind::Parallel, "{r:?}");
+    }
+
+    #[test]
+    fn a_placed_line_meets_edges_and_arcs_where_they_cross() {
+        let mut s = scene(&[], &[((2000.0, -1000.0), (2000.0, 1000.0))]);
+        s.arcs.push(Arc {
+            centre: pt(0.0, 0.0),
+            radius: 3000.0,
+            from: 0.0,
+            sweep: std::f64::consts::FRAC_PI_2,
+        });
+        s.place_guides(&[line_guide((-5000.0, 400.0), (5000.0, 400.0))]);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(2003.0, 398.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, 2000.0, 400.0), "{r:?}");
+        let x = (3000.0f64 * 3000.0 - 400.0 * 400.0).sqrt();
+        let r = s.snap(&o, pt(x + 3.0, 396.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, x, 400.0), "{r:?}");
+        // The other end of the line is off the quarter arc, and off the edge.
+        let r = s.snap(&o, pt(-x, 400.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Guide, "{r:?}");
+        // Intersections off: the crossing is just a point of the line.
+        let off = SnapOptions {
+            intersections: false,
+            ..o
+        };
+        let r = s.snap(&off, pt(2003.0, 398.0), None, false, 10.0);
+        assert_ne!(r.kind, SnapKind::Intersection, "{r:?}");
+    }
+
+    #[test]
+    fn a_line_never_crosses_an_edge_beyond_its_ends() {
+        let mut s = scene(&[], &[((2000.0, 100.0), (2000.0, 1000.0))]);
+        s.place_guides(&[line_guide((0.0, 0.0), (1.0, 0.0))]);
+        assert!(s.intersections.is_empty(), "{:?}", s.intersections);
+    }
+
+    #[test]
+    fn a_placed_circle_snaps_like_an_arc() {
+        let s = placed(&[circle_guide((1000.0, 1000.0), 2000.0)]);
+        let o = SnapOptions::default();
+        let dist = |p: Point| distance(p, pt(1000.0, 1000.0));
+        // On the circle, all round.
+        for deg in [20.0f64, 110.0, 250.0] {
+            let (sin, cos) = deg.to_radians().sin_cos();
+            let r = s.snap(
+                &o,
+                pt(1000.0 + 2004.0 * cos, 1000.0 + 2004.0 * sin),
+                None,
+                false,
+                10.0,
+            );
+            assert_eq!(r.kind, SnapKind::Edge, "{r:?}");
+            assert!((dist(r.point) - 2000.0).abs() < 1e-6, "{r:?}");
+        }
+        // Its centre is a point.
+        let r = s.snap(&o, pt(1004.0, 996.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Point, "{r:?}");
+        assert!(close(r.point, 1000.0, 1000.0));
+        // From (5000, 1000) the tangents touch at acos(r/d) from the axis.
+        let half = (2000.0f64 / 4000.0).acos();
+        let touch = pt(1000.0 + 2000.0 * half.cos(), 1000.0 + 2000.0 * half.sin());
+        let from = Some(pt(5000.0, 1000.0));
+        let r = s.snap(&o, pt(touch.x + 4.0, touch.y + 3.0), from, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Tangent, "{r:?}");
+        assert!(close(r.point, touch.x, touch.y), "{r:?}");
+        // And square to it on the line through the centre.
+        let r = s.snap(&o, pt(3004.0, 1003.0), from, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Perpendicular, "{r:?}");
+        assert!(close(r.point, 3000.0, 1000.0), "{r:?}");
+        // The edge option turns the circle off as a place to stand on.
+        let off = SnapOptions { edges: false, ..o };
+        let (sin, cos) = 20f64.to_radians().sin_cos();
+        let r = s.snap(
+            &off,
+            pt(1000.0 + 2004.0 * cos, 1000.0 + 2004.0 * sin),
+            None,
+            false,
+            10.0,
+        );
+        assert_eq!(r.kind, SnapKind::Free, "{r:?}");
+    }
+
+    #[test]
+    fn a_circle_meets_an_edge_a_line_and_another_circle() {
+        let mut s = scene(&[], &[((-3000.0, 0.0), (3000.0, 0.0))]);
+        s.place_guides(&[
+            circle_guide((0.0, 0.0), 2000.0),
+            circle_guide((2000.0, 0.0), 2000.0),
+            line_guide((0.0, -5000.0), (0.0, 5000.0)),
+        ]);
+        let o = SnapOptions::default();
+        let h = 3.0f64.sqrt() * 1000.0;
+        // Circle and edge, line and circle, circle and circle.
+        for (x, y) in [
+            (-2000.0, 0.0),
+            (0.0, 2000.0),
+            (0.0, -2000.0),
+            (1000.0, h),
+            (1000.0, -h),
+        ] {
+            let r = s.snap(&o, pt(x + 3.0, y + 4.0), None, false, 10.0);
+            assert!(
+                close(r.point, x, y) && r.kind != SnapKind::Free,
+                "({x}, {y}): {r:?}"
+            );
+        }
+        // The second circle meets the edge at 0 and 4000 but the edge ends
+        // at 3000: no crossing at 4000.
+        assert!(!s.intersections.iter().any(|q| close(*q, 4000.0, 0.0)));
+    }
+
+    #[test]
+    fn a_circle_crosses_an_arc_only_within_the_arc() {
+        let mut s = scene(&[], &[]);
+        s.arcs.push(Arc {
+            centre: pt(0.0, 0.0),
+            radius: 1000.0,
+            from: 0.0,
+            sweep: std::f64::consts::PI,
+        });
+        s.place_guides(&[circle_guide((1000.0, 0.0), 1000.0)]);
+        let h = 3.0f64.sqrt() * 500.0;
+        // The upper crossing is on the half arc, the lower one is not.
+        assert_eq!(s.intersections.len(), 1, "{:?}", s.intersections);
+        assert!(close(s.intersections[0], 500.0, h), "{:?}", s.intersections);
+    }
+
+    #[test]
+    fn identical_tangent_and_far_circles() {
+        let o = SnapOptions::default();
+        // Identical: no crossing at all, nothing breaks.
+        let mut s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            circle_guide((0.0, 0.0), 1000.0),
+        ]);
+        assert!(s.intersections.is_empty(), "{:?}", s.intersections);
+        let r = s.snap(&o, pt(1003.0, 4.0), Some(pt(5000.0, 5000.0)), false, 10.0);
+        assert!(finite(&r), "{r:?}");
+        // Concentric, different radii.
+        s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            circle_guide((0.0, 0.0), 2000.0),
+        ]);
+        assert!(s.intersections.is_empty());
+        // Externally tangent: one point (possibly listed twice).
+        // Along 30 degrees, so that no arc middle falls on the point.
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            circle_guide((3000.0 * cos, 3000.0 * sin), 2000.0),
+        ]);
+        assert!(!s.intersections.is_empty());
+        let touch = (1000.0 * cos, 1000.0 * sin);
+        assert!(s.intersections.iter().all(|q| close(*q, touch.0, touch.1)));
+        let r = s.snap(&o, pt(touch.0 + 3.0, touch.1 + 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        // Internally tangent.
+        s = placed(&[
+            circle_guide((0.0, 0.0), 3000.0),
+            circle_guide((1000.0, 0.0), 2000.0),
+        ]);
+        assert!(!s.intersections.is_empty());
+        assert!(s.intersections.iter().all(|q| close(*q, 3000.0, 0.0)));
+        // Apart, and one inside the other: nothing.
+        for (c, r) in [((5000.0, 0.0), 1000.0), ((100.0, 0.0), 500.0)] {
+            s = placed(&[circle_guide((0.0, 0.0), 1000.0), circle_guide(c, r)]);
+            assert!(s.intersections.is_empty(), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_through_the_centre_or_touching_a_circle() {
+        let o = SnapOptions::default();
+        let (sin, cos) = 30f64.to_radians().sin_cos();
+        let s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            line_guide((-5000.0 * cos, -5000.0 * sin), (5000.0 * cos, 5000.0 * sin)),
+        ]);
+        for k in [-1000.0, 1000.0] {
+            let (x, y) = (k * cos, k * sin);
+            let r = s.snap(&o, pt(x + 3.0, y + 4.0), None, false, 10.0);
+            assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+            assert!(close(r.point, x, y), "{r:?}");
+        }
+        // Touching: the line y = 1000 and the circle meet at (0, 1000).
+        let s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            line_guide((-5000.0, 1000.0), (5000.0, 1000.0)),
+        ]);
+        let r = s.snap(&o, pt(3.0, 1004.0), None, false, 10.0);
+        assert!(close(r.point, 0.0, 1000.0), "{r:?}");
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+    }
+
+    #[test]
+    fn a_slanted_line_touching_a_circle_keeps_its_point_despite_rounding() {
+        let a = 0.7f64;
+        let t = pt(1000.0 * a.cos(), 1000.0 * a.sin());
+        let (nx, ny) = (-a.sin(), a.cos());
+        let s = placed(&[
+            circle_guide((0.0, 0.0), 1000.0),
+            line_guide(
+                (t.x - 3000.0 * nx, t.y - 3000.0 * ny),
+                (t.x + 3000.0 * nx, t.y + 3000.0 * ny),
+            ),
+        ]);
+        assert!(
+            s.intersections.iter().any(|q| distance(*q, t) < 1e-3),
+            "the touching point is lost: {:?}",
+            s.intersections
+        );
+    }
+
+    #[test]
+    fn a_circle_centred_on_a_wall_end_keeps_its_points() {
+        let mut s = scene(&[(0.0, 0.0), (4000.0, 0.0)], &[((0.0, 0.0), (4000.0, 0.0))]);
+        s.place_guides(&[circle_guide((0.0, 0.0), 1500.0)]);
+        let o = SnapOptions::default();
+        // The wall end is still the point there (the centre is the same).
+        let r = s.snap(&o, pt(3.0, 3.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Point, "{r:?}");
+        assert!(close(r.point, 0.0, 0.0));
+        // The circle meets the wall at 1500.
+        let r = s.snap(&o, pt(1503.0, 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        assert!(close(r.point, 1500.0, 0.0), "{r:?}");
+        // From the wall end, which is the centre: no tangent, no crash.
+        let r = s.snap(&o, pt(700.0, 700.0), Some(pt(0.0, 0.0)), false, 10.0);
+        assert!(finite(&r) && r.kind != SnapKind::Tangent, "{r:?}");
+    }
+
+    #[test]
+    fn a_circle_of_exactly_an_edge_length_meets_the_edge_at_its_end() {
+        let mut s = scene(&[], &[((0.0, 0.0), (1500.0, 0.0))]);
+        s.place_guides(&[circle_guide((0.0, 0.0), 1500.0)]);
+        assert!(
+            s.intersections.iter().any(|q| close(*q, 1500.0, 0.0)),
+            "{:?}",
+            s.intersections
+        );
+    }
+
+    #[test]
+    fn extreme_guides_do_not_break_the_snap() {
+        let o = SnapOptions::default();
+        let walls = &[((0.0, 0.0), (4000.0, 0.0)), ((0.0, 0.0), (0.0, 3000.0))];
+        let shapes = [
+            circle_guide((0.0, 0.0), 1e-9),
+            circle_guide((0.0, 0.0), 1e-6),
+            circle_guide((2000.0, 0.0), 1e-3),
+            circle_guide((0.0, 0.0), 1e9),
+            circle_guide((0.0, 0.0), 1e12),
+            circle_guide((1e12, 1e12), 1e12),
+            line_guide((0.0, 0.0), (1e-9, 0.0)),
+            line_guide((0.0, 0.0), (1e-12, 0.0)),
+            line_guide((0.0, 0.0), (0.0, 0.0)),
+            line_guide((-1e12, 5.0), (1e12, 5.0)),
+            line_guide((0.0, 0.0), (1e-3, 1e-3)),
+        ];
+        for shape in shapes {
+            let mut s = scene(&[(0.0, 0.0)], walls);
+            s.place_guides(&[shape, circle_guide((1000.0, 0.0), 1000.0)]);
+            for from in [None, Some(pt(0.0, 0.0)), Some(pt(2000.0, 5.0))] {
+                for shift in [false, true] {
+                    for p in [pt(0.0, 0.0), pt(5.0, 5.0), pt(2000.0, 3.0), pt(1e6, 1e6)] {
+                        let r = s.snap(&o, p, from, shift, 10.0);
+                        assert!(finite(&r), "{shape:?} {from:?} {shift} {p:?}: {r:?}");
+                    }
+                }
+            }
+            assert!(
+                s.intersections
+                    .iter()
+                    .all(|q| q.x.is_finite() && q.y.is_finite()),
+                "{shape:?}: {:?}",
+                s.intersections
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_length_line_places_nothing_and_a_zero_length_edge_crosses_nothing() {
+        let mut s = scene(
+            &[],
+            &[((50.0, 50.0), (50.0, 50.0)), ((0.0, 0.0), (1000.0, 0.0))],
+        );
+        s.place_guides(&[line_guide((7.0, 7.0), (7.0, 7.0))]);
+        assert!(s.placed.is_empty());
+        assert!(s.intersections.is_empty());
+        // Lines through and parallel to the edges: no crossing with a point,
+        // none with the parallel edge.
+        s.place_guides(&[
+            line_guide((0.0, 50.0), (100.0, 50.0)),
+            line_guide((0.0, 800.0), (100.0, 800.0)),
+        ]);
+        assert!(s.intersections.is_empty(), "{:?}", s.intersections);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(500.0, 52.0), Some(pt(10.0, 52.0)), false, 10.0);
+        assert!(finite(&r), "{r:?}");
+        // A circle and a zero-length edge: nothing, no division by zero.
+        let mut s = scene(&[], &[((50.0, 50.0), (50.0, 50.0))]);
+        s.place_guides(&[circle_guide((50.0, 50.0), 100.0)]);
+        assert!(s.intersections.is_empty());
+    }
+
+    #[test]
+    fn points_win_over_placed_lines_and_crossings_over_one_line() {
+        let mut s = scene(&[(2000.0, 4.0)], &[]);
+        s.place_guides(&[
+            line_guide((0.0, 0.0), (1000.0, 0.0)),
+            line_guide((2000.0, -500.0), (2000.0, 500.0)),
+        ]);
+        let o = SnapOptions::default();
+        // A point wins over the crossing of the lines it is near.
+        let r = s.snap(&o, pt(2001.0, 3.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Point, "{r:?}");
+        // The crossing wins over either line alone.
+        let r = s.snap(&o, pt(2003.0, -8.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Intersection, "{r:?}");
+        // Near a line but far from the crossing: the line.
+        let r = s.snap(&o, pt(1500.0, 4.0), None, false, 10.0);
+        assert_eq!(r.kind, SnapKind::Guide, "{r:?}");
+        // The nearer of two lines wins.
+        let s = placed(&[
+            line_guide((0.0, 0.0), (1000.0, 0.0)),
+            line_guide((0.0, 6.0), (1000.0, 6.0)),
+        ]);
+        let r = s.snap(&o, pt(500.0, 5.0), None, false, 10.0);
+        assert!(close(r.point, 500.0, 6.0), "{r:?}");
+    }
+
+    #[test]
+    fn shift_still_locks_the_angle_with_a_placed_line() {
+        let s = placed(&[line_guide((0.0, 0.0), (1000.0, 1000.0))]);
+        let o = SnapOptions::default();
+        let r = s.snap(&o, pt(1000.0, 300.0), Some(pt(0.0, 0.0)), true, 10.0);
+        assert!(close(r.point, 1000.0, 0.0), "{r:?}");
+        let r = s.snap(&o, pt(1000.0, 990.0), Some(pt(0.0, 5.0)), true, 10.0);
+        assert!(finite(&r), "{r:?}");
     }
 }

@@ -5,10 +5,10 @@
 
 use archibim_commands::{Command, History};
 use archibim_model::{
-    Align, Anchor, Beam, Column, Framing, Hand, Id, Layer, LayerRole, LevelKind, LevelRef,
-    Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part, Performance,
-    Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story, Wall,
-    WallReference,
+    Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, Layer, LayerRole, LevelKind,
+    LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part,
+    Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story,
+    Wall, WallReference,
 };
 use archibim_ui::{Preset, Templates};
 
@@ -146,6 +146,25 @@ pub fn house() -> Result<(History, Id, Templates)> {
         bottom: level(ground, 0.0),
         top: level(ground, 1000.0),
     }))?;
+    // Guides set out by hand: a line 1500 south of the house, and a
+    // circle 2200 around a tree to keep clear of.
+    for shape in [
+        GuideShape::Line {
+            a: Point::new(0.0, -9500.0),
+            b: Point::new(10000.0, -9500.0),
+        },
+        GuideShape::Circle {
+            centre: Point::new(12500.0, -8000.0),
+            radius: 2200.0,
+        },
+    ] {
+        let id = h.new_id();
+        h.run(Command::AddGuide(Guide {
+            id,
+            story: ground,
+            shape,
+        }))?;
+    }
     let preset = |name, layers: &Vec<Layer>| Preset {
         name,
         layers: layers.clone(),

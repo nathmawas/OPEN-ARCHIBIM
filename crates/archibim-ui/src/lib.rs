@@ -15,7 +15,8 @@ use archibim_geometry::{
     roof_overhang, stair_steps,
 };
 use archibim_model::{
-    Beam, Column, Id, Layer, Mesh, MeshPoint, Opening, Point, Project, Roof, Slab, Stair, Wall,
+    Beam, Column, Guide, GuideShape, Id, Layer, Mesh, MeshPoint, Opening, Point, Project, Roof,
+    Slab, Stair, Wall,
 };
 use egui::{Key, Modifiers, Sense, Ui};
 
@@ -90,6 +91,22 @@ pub enum Tool {
     Stair,
     /// Draws terrain mesh outlines.
     Mesh,
+    /// Places guides to draw against.
+    // ponytail: no tool has an icon yet (ADR 0004); draw this one with the
+    // others when the tool bar gets its icons.
+    Guide,
+}
+
+/// How the clicks of the guide tool make a guide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuideMethod {
+    /// The line through two points.
+    Line,
+    /// A line parallel to an edge, on the side and at the distance clicked
+    /// or typed.
+    Parallel,
+    /// A circle: its centre, then a point on it or a typed radius.
+    Circle,
 }
 
 /// How the clicks of the slab tool make an outline.
@@ -141,6 +158,14 @@ pub struct Workspace {
     /// Picking two points to place the next one halfway between them:
     /// the points picked so far.
     halfway: Option<Vec<Point>>,
+    guide_method: GuideMethod,
+    /// The edge a parallel guide follows, once clicked.
+    guide_edge: Option<(Point, Point)>,
+    /// Guides placed by hand are shown and snapped to.
+    show_guides: bool,
+    /// Measuring the next point from a reference point: `None` inside
+    /// until the reference is clicked.
+    reference: Option<Option<Point>>,
 }
 
 impl Workspace {
@@ -166,6 +191,10 @@ impl Workspace {
             picked: Vec::new(),
             typed: Typed::default(),
             halfway: None,
+            guide_method: GuideMethod::Line,
+            guide_edge: None,
+            show_guides: true,
+            reference: None,
         }
     }
 
@@ -226,7 +255,9 @@ impl Workspace {
         egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
         egui::Panel::right("properties").show(ui, |ui| {
             if self.selection.is_none() && self.tool != Tool::Select {
-                self.settings(ui, history.project());
+                if let Some(command) = self.settings(ui, history.project()) {
+                    changed |= self.run(history, command);
+                }
             } else if let Some(command) =
                 self.properties.show(ui, history.project(), self.selection)
             {
@@ -234,15 +265,30 @@ impl Workspace {
             }
         });
         egui::Panel::bottom("status").show(ui, |ui| {
-            let hint = match self.halfway.as_ref().map(Vec::len) {
-                Some(0) => t("halfway.first"),
-                Some(_) => t("halfway.second"),
-                None if self.tool != Tool::Select => t("draw.hint"),
-                None => "",
+            let pending = match (&self.halfway, self.reference) {
+                (Some(h), _) if h.is_empty() => Some(t("halfway.first")),
+                (Some(_), _) => Some(t("halfway.second")),
+                (None, Some(None)) => Some(t("reference.first")),
+                (None, Some(Some(_))) => Some(t("reference.second")),
+                (None, None) => None,
             };
-            ui.label(match (self.halfway.is_some(), self.message.as_deref()) {
-                (false, Some(message)) => message,
-                _ => hint,
+            let hint = match self.tool {
+                Tool::Guide if self.guide_method == GuideMethod::Parallel => {
+                    t(if self.guide_edge.is_some() {
+                        "guide.offset"
+                    } else {
+                        "guide.pick_edge"
+                    })
+                }
+                Tool::Guide if self.guide_method == GuideMethod::Line => t("guide.line"),
+                Tool::Guide => t("guide.circle"),
+                Tool::Select => "",
+                _ => t("draw.hint"),
+            };
+            ui.label(match (pending, self.message.as_deref()) {
+                (Some(pending), _) => pending,
+                (None, Some(message)) => message,
+                (None, None) => hint,
             });
         });
         if self.dirty || self.model.stale(self.selection) {
@@ -253,7 +299,7 @@ impl Workspace {
             Layout::Plan => changed |= self.plan(ui, history, plan),
             Layout::Model => {
                 let typing = ui.ctx().memory(|m| m.focused().is_some());
-                changed |= !typing && self.keys(ui, history, plan, None, None);
+                changed |= !typing && self.keys(ui, history, plan, None, None, 0.0);
                 self.model.show(ui);
             }
             Layout::Both => ui.columns(2, |columns| {
@@ -286,6 +332,7 @@ impl Workspace {
             (Tool::Roof, "tool.roof"),
             (Tool::Stair, "tool.stair"),
             (Tool::Mesh, "tool.mesh"),
+            (Tool::Guide, "tool.guide"),
         ] {
             ui.selectable_value(&mut self.tool, tool, t(key));
         }
@@ -308,6 +355,7 @@ impl Workspace {
             (&mut o.angles, "snap.angles"),
             (&mut o.alignments, "snap.alignments"),
             (&mut o.guides, "snap.guides"),
+            (&mut self.show_guides, "snap.placed"),
         ] {
             ui.checkbox(on, t(key));
         }
@@ -335,6 +383,16 @@ impl Workspace {
                 None => Some(Vec::new()),
             };
         }
+        if self.tool != Tool::Select
+            && ui
+                .selectable_label(self.reference.is_some(), t("snap.reference"))
+                .clicked()
+        {
+            self.reference = match self.reference {
+                Some(_) => None,
+                None => Some(None),
+            };
+        }
         ui.separator();
         for (layout, key) in [
             (Layout::Plan, "view.plan"),
@@ -346,11 +404,37 @@ impl Workspace {
     }
 
     /// The settings of the active tool: how it draws, and the parameters
-    /// of what it draws next.
-    fn settings(&mut self, ui: &mut Ui, project: &Project) {
+    /// of what it draws next. Returns the command of a button pressed.
+    fn settings(&mut self, ui: &mut Ui, project: &Project) -> Option<Command> {
         ui.heading(t("settings.title"));
         ui.label(t("settings.method"));
         match self.tool {
+            Tool::Guide => {
+                let before = self.guide_method;
+                for (method, key) in [
+                    (GuideMethod::Line, "method.guide_line"),
+                    (GuideMethod::Parallel, "method.guide_parallel"),
+                    (GuideMethod::Circle, "method.guide_circle"),
+                ] {
+                    ui.selectable_value(&mut self.guide_method, method, t(key));
+                }
+                if self.guide_method != before {
+                    self.stop();
+                }
+                ui.separator();
+                // The guides of the story drawn on, in one undo step.
+                let story = self.wall.template.story;
+                let removes: Vec<Command> = project
+                    .guides
+                    .iter()
+                    .filter(|g| g.story == story)
+                    .map(|g| Command::RemoveGuide(g.id))
+                    .collect();
+                ui.label(t("guide.placed"));
+                let label = format!("{} ({})", t("guide.clear"), removes.len());
+                let clear = ui.add_enabled(!removes.is_empty(), egui::Button::new(label));
+                return clear.clicked().then_some(Command::Group(removes));
+            }
             Tool::Wall => {
                 let w = &mut self.wall;
                 for (method, key) in [
@@ -413,7 +497,9 @@ impl Workspace {
             Tool::Mesh => Element::Mesh(self.templates.mesh.clone()),
             Tool::Stair => Element::Stair(self.templates.stair.clone()),
             Tool::Opening if self.door => Element::Opening(self.templates.door.clone()),
-            Tool::Opening | Tool::Select => Element::Opening(self.templates.window.clone()),
+            Tool::Opening | Tool::Select | Tool::Guide => {
+                Element::Opening(self.templates.window.clone())
+            }
         };
         fields(ui, &mut element, project);
         // Settings are not part of the model: they change at once, with no
@@ -428,7 +514,9 @@ impl Workspace {
             Element::Stair(s) => self.templates.stair = s,
             Element::Opening(o) if self.door => self.templates.door = o,
             Element::Opening(o) => self.templates.window = o,
+            Element::Guide(_) => {}
         }
+        None
     }
 
     fn stop(&mut self) {
@@ -438,6 +526,8 @@ impl Workspace {
         self.picked.clear();
         self.typed.clear();
         self.halfway = None;
+        self.guide_edge = None;
+        self.reference = None;
     }
 
     fn run(&mut self, history: &mut History, command: Command) -> bool {
@@ -466,6 +556,24 @@ impl Workspace {
             .start()
             .or(self.beam_start)
             .or(self.slab_points.last().copied());
+        // The direction of the previous segment, which typed angles turn
+        // from. ponytail: the chord of a curved wall, not its end tangent;
+        // a chained beam starts afresh from the x axis.
+        let placed = match self.wall.points() {
+            [] => &self.slab_points[..],
+            points => points,
+        };
+        // An arc drawn by its points has no previous segment yet.
+        let arc = matches!(self.wall.method, WallMethod::Arc | WallMethod::Circle);
+        let base = match placed {
+            [.., a, b] if !arc => (b.y - a.y).atan2(b.x - a.x).to_degrees(),
+            _ => 0.0,
+        };
+        // Measuring from a reference point: typed values start from it.
+        let (from, base) = match self.reference {
+            Some(Some(r)) => (Some(r), 0.0),
+            _ => (from, base),
+        };
         let drawing: Vec<Point> = self
             .wall
             .points()
@@ -477,6 +585,14 @@ impl Workspace {
         let snapped = response.hover_pos().map(|p| {
             let p = self.view.model(p);
             let mut scene = Scene::new(history.project(), &drawing);
+            // ponytail: guides of every story, like everything else in the
+            // one plan there is; keep those of the view's story once views
+            // have their own story (ADR 0009).
+            if self.show_guides {
+                let shapes: Vec<GuideShape> =
+                    history.project().guides.iter().map(|g| g.shape).collect();
+                scene.place_guides(&shapes);
+            }
             // The edge under the pointer is picked up for guide lines.
             if let Some(edge) = scene.edge_near(p, snap)
                 && !self.picked.contains(&edge)
@@ -492,13 +608,13 @@ impl Workspace {
         // Where the next point goes: what was typed, or the snapped pointer.
         let cursor = snapped
             .as_ref()
-            .map(|s| self.typed.point(from, s).unwrap_or(s.point));
+            .map(|s| self.next_point(from, base, s).unwrap_or(s.point));
         if let Some(p) = cursor {
             self.wall.hover(p);
         }
 
         let typing = ui.ctx().memory(|m| m.focused().is_some());
-        let mut changed = !typing && self.keys(ui, history, plan, snapped.as_ref(), from);
+        let mut changed = !typing && self.keys(ui, history, plan, snapped.as_ref(), from, base);
         // Space held: the tool takes the contour under the pointer.
         let space = !typing && ui.input(|i| i.key_down(Key::Space));
         let outline_story = match self.tool {
@@ -534,6 +650,30 @@ impl Workspace {
 
         self.view
             .paint(&painter, history.project(), plan, self.selection);
+        if self.show_guides {
+            for g in &history.project().guides {
+                let stroke = if self.selection == Some(g.id) {
+                    egui::Stroke::new(2.0, plan::SELECTED)
+                } else {
+                    egui::Stroke::new(1.0, plan::PLACED)
+                };
+                self.view.guide(&painter, &g.shape, stroke);
+            }
+        }
+        if self.tool == Tool::Guide {
+            // The edge followed, then the guide about to be placed.
+            if let Some((a, b)) = self.guide_edge {
+                let edge = egui::Stroke::new(3.0, plan::SELECTED);
+                painter.line_segment([self.view.screen(a), self.view.screen(b)], edge);
+            }
+            if let Some(shape) = cursor.and_then(|p| self.guide_at(p)) {
+                self.view
+                    .guide(&painter, &shape, egui::Stroke::new(2.0, plan::PLACED));
+            }
+        }
+        if let Some(Some(r)) = self.reference {
+            self.view.reference(&painter, r, cursor);
+        }
         let rectangle_from = match self.tool {
             Tool::Wall if self.wall.method == WallMethod::Rectangle => self.wall.start(),
             Tool::Slab | Tool::Roof | Tool::Mesh if self.slab_method == SlabMethod::Rectangle => {
@@ -554,12 +694,13 @@ impl Workspace {
         {
             let live = from.map(|a| {
                 let (dx, dy) = (p.x - a.x, p.y - a.y);
-                ((dx * dx + dy * dy).sqrt(), dy.atan2(dx).to_degrees())
+                let turn = (dy.atan2(dx).to_degrees() - base + 180.0).rem_euclid(360.0) - 180.0;
+                ((dx * dx + dy * dy).sqrt(), turn)
             });
             // Typed values that give no point show as a warning.
             let gives_point = snapped
                 .as_ref()
-                .is_some_and(|s| self.typed.point(from, s).is_some());
+                .is_some_and(|s| self.next_point(from, base, s).is_some());
             let label = self.typed.label(live);
             let warn = !self.typed.is_empty() && !gives_point;
             self.view
@@ -580,6 +721,15 @@ impl Workspace {
     /// between, picks it.
     fn place(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
         self.typed.clear();
+        // The reference is picked first, then serves for one point.
+        match self.reference {
+            Some(None) => {
+                self.reference = Some(Some(p));
+                return false;
+            }
+            Some(Some(_)) => self.reference = None,
+            None => {}
+        }
         let Some(picked) = &mut self.halfway else {
             return self.click(history, plan, p, snap);
         };
@@ -595,7 +745,28 @@ impl Workspace {
     fn click(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
         match self.tool {
             Tool::Select => {
-                self.selection = hit(history.project(), plan, p, snap);
+                self.selection = hit(history.project(), plan, p, snap, self.show_guides);
+                false
+            }
+            Tool::Guide => {
+                if let Some(shape) = self.guide_at(p) {
+                    self.slab_points.clear();
+                    self.guide_edge = None;
+                    let guide = Guide {
+                        id: history.new_id(),
+                        story: self.wall.template.story,
+                        shape,
+                    };
+                    return self.run(history, Command::AddGuide(guide));
+                }
+                if self.guide_method == GuideMethod::Parallel {
+                    self.guide_edge = Scene::new(history.project(), &[]).edge_near(p, snap);
+                    if self.guide_edge.is_none() {
+                        self.message = Some(t("guide.no_edge").to_owned());
+                    }
+                } else {
+                    self.slab_points.push(p);
+                }
                 false
             }
             Tool::Stair => {
@@ -679,6 +850,44 @@ impl Workspace {
         }
     }
 
+    /// Where the next point goes with what was typed, if that gives one: a
+    /// parallel guide at the typed distance from its edge, on the pointer's
+    /// side, or the typed length and angle.
+    fn next_point(&self, from: Option<Point>, base: f64, s: &Snap) -> Option<Point> {
+        if let Some((a, b)) = self.guide_edge {
+            let l = self.typed.length()?;
+            let f = foot(a, b, s.point)?;
+            let (dx, dy) = (s.point.x - f.x, s.point.y - f.y);
+            let d = dx.hypot(dy);
+            return (d > 1e-9).then(|| Point::new(f.x + dx / d * l, f.y + dy / d * l));
+        }
+        self.typed.point(from, base, s)
+    }
+
+    /// The guide a click at `p` places, once its first point or its edge
+    /// is picked.
+    fn guide_at(&self, p: Point) -> Option<GuideShape> {
+        if self.tool != Tool::Guide {
+            return None;
+        }
+        match (self.guide_method, self.guide_edge, self.slab_points.first()) {
+            (GuideMethod::Parallel, Some((a, b)), _) => {
+                let f = foot(a, b, p)?;
+                let (dx, dy) = (p.x - f.x, p.y - f.y);
+                Some(GuideShape::Line {
+                    a: Point::new(a.x + dx, a.y + dy),
+                    b: Point::new(b.x + dx, b.y + dy),
+                })
+            }
+            (GuideMethod::Line, _, Some(&a)) => Some(GuideShape::Line { a, b: p }),
+            (GuideMethod::Circle, _, Some(&centre)) => Some(GuideShape::Circle {
+                centre,
+                radius: distance(centre, p),
+            }),
+            _ => None,
+        }
+    }
+
     /// Makes the element of the active tool from the outline drawn.
     fn close_outline(&mut self, history: &mut History) -> bool {
         let outline = std::mem::take(&mut self.slab_points);
@@ -732,6 +941,7 @@ impl Workspace {
         plan: &[LayerPlan],
         snapped: Option<&Snap>,
         from: Option<Point>,
+        base: f64,
     ) -> bool {
         let drawing = self.tool != Tool::Select;
         let snap = f64::from(SNAP_PX / self.view.scale());
@@ -764,6 +974,11 @@ impl Workspace {
                                 Some(_) => None,
                                 None => Some(Vec::new()),
                             };
+                        } else if c.eq_ignore_ascii_case(&'b') {
+                            self.reference = match self.reference {
+                                Some(_) => None,
+                                None => Some(None),
+                            };
                         } else {
                             self.typed.type_char(c, from.is_some());
                         }
@@ -773,10 +988,15 @@ impl Workspace {
                     key, pressed: true, ..
                 } => match key {
                     Key::Backspace => self.typed.erase(),
-                    // Escape first forgets what was typed or picked, then
-                    // stops drawing.
-                    Key::Escape if self.halfway.is_some() => self.halfway = None,
+                    // Escape first forgets what was typed, then the halfway
+                    // or reference point being picked, then stops drawing.
                     Key::Escape if !self.typed.is_empty() => self.typed.clear(),
+                    Key::Escape if self.halfway.is_some() || self.reference.is_some() => {
+                        self.halfway = None;
+                        self.reference = None;
+                    }
+                    // A parallel guide: back to picking its edge.
+                    Key::Escape if self.guide_edge.is_some() => self.guide_edge = None,
                     Key::Escape => {
                         self.stop();
                         self.selection = None;
@@ -784,9 +1004,10 @@ impl Workspace {
                     // With something typed, Enter places that point.
                     Key::Enter
                         if drawing
-                            && snapped.is_some_and(|s| self.typed.point(from, s).is_some()) =>
+                            && snapped
+                                .is_some_and(|s| self.next_point(from, base, s).is_some()) =>
                     {
-                        if let Some(p) = snapped.and_then(|s| self.typed.point(from, s)) {
+                        if let Some(p) = snapped.and_then(|s| self.next_point(from, base, s)) {
                             changed |= self.place(history, plan, p, snap);
                         }
                     }
@@ -807,14 +1028,24 @@ impl Workspace {
     }
 }
 
+/// The foot of the perpendicular from `p` on the line through `a` and `b`.
+fn foot(a: Point, b: Point, p: Point) -> Option<Point> {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let l2 = dx * dx + dy * dy;
+    (l2 > 1e-18).then(|| {
+        let k = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+        Point::new(a.x + dx * k, a.y + dy * k)
+    })
+}
+
 fn distance(a: Point, b: Point) -> f64 {
     ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
 }
 
 /// The element under `p`: openings first, then columns, beams, stairs,
-/// walls, the lines of roofs (within `near`), slabs, the inside of roofs
-/// and terrain meshes.
-fn hit(project: &Project, plan: &[LayerPlan], p: Point, near: f64) -> Option<Id> {
+/// walls, the lines of roofs (within `near`), the guides placed by hand
+/// if `guides` are shown, slabs, the inside of roofs and terrain meshes.
+fn hit(project: &Project, plan: &[LayerPlan], p: Point, near: f64, guides: bool) -> Option<Id> {
     let opening = project
         .openings
         .iter()
@@ -873,6 +1104,18 @@ fn hit(project: &Project, plan: &[LayerPlan], p: Point, near: f64) -> Option<Id>
             .map(|m| m.id)
     };
     let wall = || wall_at(project, plan, p).map(|(id, _, _)| id);
+    let guide = || {
+        let on = |g: &Guide| match g.shape {
+            GuideShape::Line { a, b } => foot(a, b, p).is_some_and(|f| distance(f, p) <= near),
+            GuideShape::Circle { centre, radius } => (distance(centre, p) - radius).abs() <= near,
+        };
+        project
+            .guides
+            .iter()
+            .filter(|_| guides)
+            .find(|g| on(g))
+            .map(|g| g.id)
+    };
     let slab = || {
         project
             .slabs
@@ -886,6 +1129,7 @@ fn hit(project: &Project, plan: &[LayerPlan], p: Point, near: f64) -> Option<Id>
         .or_else(stair)
         .or_else(wall)
         .or_else(roof_line)
+        .or_else(guide)
         .or_else(slab)
         .or_else(roof)
         .or_else(mesh)
@@ -915,4 +1159,74 @@ fn wall_at(project: &Project, plan: &[LayerPlan], p: Point) -> Option<(Id, f64, 
         + (p.y - w.start.y) * (w.end.y - w.start.y))
         / length;
     Some((id, along, length))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use archibim_model::Story;
+
+    fn pt(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    #[test]
+    fn the_foot_of_a_perpendicular_needs_two_distinct_points() {
+        let f = foot(pt(0.0, 0.0), pt(10.0, 0.0), pt(3.0, 5.0));
+        assert_eq!(f, Some(pt(3.0, 0.0)));
+        // Beyond the ends: still on the infinite line.
+        assert_eq!(
+            foot(pt(0.0, 0.0), pt(10.0, 0.0), pt(-30.0, 5.0)),
+            Some(pt(-30.0, 0.0))
+        );
+        assert_eq!(foot(pt(1.0, 1.0), pt(1.0, 1.0), pt(3.0, 5.0)), None);
+        assert_eq!(foot(pt(1.0, 1.0), pt(1.0 + 1e-10, 1.0), pt(3.0, 5.0)), None);
+    }
+
+    fn project_with(shapes: &[GuideShape]) -> Project {
+        let mut p = Project::new();
+        let story = p.new_id();
+        let _ = p.insert_story(Story {
+            id: story,
+            name: String::new(),
+            finished_level: 0.0,
+            floor_build_up: 0.0,
+        });
+        for &shape in shapes {
+            let id = p.new_id();
+            let _ = p.insert_guide(Guide { id, story, shape });
+        }
+        p
+    }
+
+    #[test]
+    fn a_guide_is_selected_on_its_line_or_circle_and_only_when_shown() {
+        let p = project_with(&[
+            GuideShape::Line {
+                a: pt(0.0, 0.0),
+                b: pt(1000.0, 0.0),
+            },
+            GuideShape::Circle {
+                centre: pt(0.0, 5000.0),
+                radius: 1000.0,
+            },
+        ]);
+        assert_eq!(p.guides.len(), 2);
+        let (line, circle) = (p.guides[0].id, p.guides[1].id);
+        // The line is infinite: far past its points still hits.
+        assert_eq!(hit(&p, &[], pt(9000.0, 3.0), 10.0, true), Some(line));
+        assert_eq!(hit(&p, &[], pt(9000.0, 30.0), 10.0, true), None);
+        // The circle: on it, not inside, not at the centre.
+        assert_eq!(hit(&p, &[], pt(1000.0, 5004.0), 10.0, true), Some(circle));
+        assert_eq!(hit(&p, &[], pt(0.0, 5000.0), 10.0, true), None);
+        assert_eq!(hit(&p, &[], pt(500.0, 5000.0), 10.0, true), None);
+        // Hidden guides are not selectable.
+        assert_eq!(hit(&p, &[], pt(9000.0, 3.0), 10.0, false), None);
+    }
+
+    #[test]
+    fn selecting_a_guide_tolerates_nothing_to_hit() {
+        let p = project_with(&[]);
+        assert_eq!(hit(&p, &[], pt(0.0, 0.0), 10.0, true), None);
+    }
 }

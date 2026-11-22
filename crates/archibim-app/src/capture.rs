@@ -90,6 +90,14 @@ impl Capture {
                 ..Shot::new("05-tangent", None, Layout::Plan)
             },
             Shot::new("06-3d", None, Layout::Model),
+            // A wall started on the guide line south of the house, the
+            // pointer near where the line crosses the tree circle.
+            Shot {
+                tool: Tool::Wall,
+                clicks: vec![Point::new(2000.0, -9500.0)],
+                hover: Some(Point::new(10870.0, -9470.0)),
+                ..Shot::new("07-guides", None, Layout::Plan)
+            },
         ];
         Self {
             dir,

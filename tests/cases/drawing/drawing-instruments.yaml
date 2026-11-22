@@ -23,8 +23,10 @@ expect:
     apply to all of them.
   - With every tool that places a point (column and opening included),
     digits typed give the length of the next segment towards the pointer;
-    Tab switches to the angle, in degrees anticlockwise from the x axis,
-    and back; a typed value holds while the other follows the pointer; a
+    Tab switches to the angle and back. The angle is in degrees, turned
+    anticlockwise from the previous segment carried on: 0 goes straight on,
+    90 turns left, -90 turns right; the first segment turns from the x
+    axis. A typed value holds while the other follows the pointer; a
     click, or Enter, places the point.
   - Enter with nothing typed still closes an outline or ends a stair.
   - Before the first point, with the pointer on the extension of a picked
@@ -33,16 +35,16 @@ expect:
     nearer the pointer, or the point it lines up with.
   - The typed values show next to the pointer, or else the length and the
     angle from the last point; Backspace erases. Escape first clears what
-    was typed, then stops drawing.
+    was typed, then the halfway or reference point being picked, then
+    stops drawing.
   - The key M, or its button in the drawing aids, then two clicks on
     points, places the point halfway between them; the two clicks place
     nothing; the status bar says which point to click; Escape cancels.
   - These aids change nothing in the model and are not undo steps. Points
     on arcs turn off with the edges, middles of arcs with the middles,
     tangents and points square to an arc with the guide lines.
-  - Not yet - typed values relative to the previous segment, or as x and
-    y offsets; a typed offset from a reference point; operators after a
-    typed value (2000+150).
-  - Not yet - guide circles of a given radius kept on the plan, and guides
-    placed by hand (T-square, ruler) that stay until deleted.
+  - Not yet - typed values as x and y offsets; operators after a typed
+    value (2000+150).
+  - Guides placed by hand and the reference point are in the case
+    placed-guides.
   - Not yet - an arc wall tangent to the previous wall.

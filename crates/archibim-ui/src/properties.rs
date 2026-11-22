@@ -4,8 +4,9 @@
 use archibim_commands::Command;
 use archibim_geometry::{contains, stair_steps};
 use archibim_model::{
-    Align, Anchor, Beam, Column, Id, Layer, LayerRole, Material, Mesh, MeshPoint, Opening, Point,
-    Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall, WallReference,
+    Align, Anchor, Beam, Column, Guide, GuideShape, Id, Layer, LayerRole, Material, Mesh,
+    MeshPoint, Opening, Point, Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall,
+    WallReference,
 };
 use egui::{DragValue, Response, Ui};
 
@@ -30,6 +31,8 @@ pub enum Element {
     Mesh(Mesh),
     /// A stair.
     Stair(Stair),
+    /// A guide placed by hand.
+    Guide(Guide),
 }
 
 impl Element {
@@ -43,6 +46,7 @@ impl Element {
             .or_else(|| project.roof(id).ok().cloned().map(Self::Roof))
             .or_else(|| project.mesh(id).ok().cloned().map(Self::Mesh))
             .or_else(|| project.stair(id).ok().cloned().map(Self::Stair))
+            .or_else(|| project.guide(id).ok().cloned().map(Self::Guide))
     }
 
     fn id(&self) -> Id {
@@ -55,6 +59,7 @@ impl Element {
             Self::Roof(e) => e.id,
             Self::Mesh(e) => e.id,
             Self::Stair(e) => e.id,
+            Self::Guide(e) => e.id,
         }
     }
 
@@ -68,6 +73,7 @@ impl Element {
             Self::Roof(e) => Command::ReplaceRoof(e),
             Self::Mesh(e) => Command::ReplaceMesh(e),
             Self::Stair(e) => Command::ReplaceStair(e),
+            Self::Guide(e) => Command::ReplaceGuide(e),
         }
     }
 
@@ -83,6 +89,7 @@ impl Element {
             Self::Roof(_) => Command::RemoveRoof(id),
             Self::Mesh(_) => Command::RemoveMesh(id),
             Self::Stair(_) => Command::RemoveStair(id),
+            Self::Guide(_) => Command::RemoveGuide(id),
         }
     }
 }
@@ -239,6 +246,15 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> E
         Element::Roof(r) => roof(ui, e, r, materials),
         Element::Mesh(m) => mesh(ui, e, m, materials),
         Element::Stair(s) => stair(ui, e, s, project),
+        Element::Guide(g) => match &mut g.shape {
+            GuideShape::Line { .. } => {
+                ui.label(t("el.guide_line"));
+            }
+            GuideShape::Circle { radius, .. } => {
+                ui.label(t("el.guide_circle"));
+                number(ui, e, "p.radius", radius, 1.0);
+            }
+        },
     }
     edit
 }
