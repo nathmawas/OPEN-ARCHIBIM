@@ -160,6 +160,18 @@ impl Workspace {
         }
     }
 
+    /// Selects an element, as a click with the selection tool would, or
+    /// nothing.
+    pub fn select(&mut self, id: Option<Id>) {
+        self.tool = Tool::Select;
+        self.selection = id;
+    }
+
+    /// Shows the plan, the 3D view, or both.
+    pub fn set_layout(&mut self, layout: Layout) {
+        self.layout = layout;
+    }
+
     /// Shows the whole workspace. Returns true when the project changed.
     pub fn show(&mut self, ui: &mut Ui, history: &mut History, plan: &[LayerPlan]) -> bool {
         let mut changed = false;

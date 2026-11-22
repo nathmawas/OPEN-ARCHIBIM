@@ -499,7 +499,7 @@ fn build_up(
             if !simple {
                 if i > 0
                     && ui
-                        .small_button("↑")
+                        .small_button(egui::RichText::new("↑").monospace())
                         .on_hover_text(t("buildup.up"))
                         .clicked()
                 {

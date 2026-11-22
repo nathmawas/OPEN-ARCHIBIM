@@ -1,10 +1,16 @@
 //! OPEN-ARCHIBIM: assembles the crates into the application.
 //!
 //! Stage 0 prototype: opens a demonstration house on its ground floor plan,
-//! with the base tools (select, wall, slab, column, beam, opening), the
-//! properties palette and the 3D view.
+//! with the base tools (select, wall, slab, column, beam, opening, roof,
+//! stair, terrain), the properties palette and the 3D view.
+//!
+//! `archibim-app --capture <folder>` saves pictures of the house instead,
+//! then closes.
 
+mod capture;
 mod demo;
+
+use capture::Capture;
 
 use archibim_commands::History;
 use archibim_geometry::{LayerPlan, Phase, plan_layers};
@@ -16,6 +22,7 @@ struct App {
     story: Id,
     plan: Vec<LayerPlan>,
     workspace: Workspace,
+    capture: Option<Capture>,
 }
 
 impl eframe::App for App {
@@ -27,22 +34,54 @@ impl eframe::App for App {
                 self.plan = plan;
             }
         }
+        if let Some(capture) = &mut self.capture {
+            capture.frame(ui.ctx(), &mut self.workspace);
+        }
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &eframe::egui::Context, raw: &mut eframe::egui::RawInput) {
+        if self.capture.as_ref().is_some_and(Capture::fits) {
+            raw.events.push(eframe::egui::Event::Key {
+                key: eframe::egui::Key::Home,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: eframe::egui::Modifiers::NONE,
+            });
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (history, story, templates) = demo::house()?;
     let plan = plan_layers(history.project(), story, Phase::Proposed)?;
+    let args: Vec<String> = std::env::args().collect();
+    let capture = match args.iter().position(|a| a == "--capture") {
+        Some(i) => {
+            let dir = std::path::PathBuf::from(args.get(i + 1).ok_or("--capture <folder>")?);
+            std::fs::create_dir_all(&dir)?;
+            Some(Capture::new(dir, history.project()))
+        }
+        None => None,
+    };
+    let mut viewport = eframe::egui::ViewportBuilder::default();
+    if capture.is_some() {
+        // The same size every time, so pictures compare from one round to
+        // the next.
+        viewport = viewport.with_inner_size([1600.0, 900.0]);
+    }
     let app = App {
         history,
         story,
         plan,
         workspace: Workspace::new(templates),
+        capture,
     };
     eframe::run_native(
         "OPEN-ARCHIBIM",
         eframe::NativeOptions {
             depth_buffer: archibim_render::DEPTH_BITS,
+            viewport,
             ..Default::default()
         },
         Box::new(|cc| {

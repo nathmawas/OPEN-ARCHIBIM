@@ -12,6 +12,7 @@ archibim-commands.workspace = true
 archibim-geometry.workspace = true
 archibim-render.workspace = true
 archibim-ui.workspace = true
+png = "0.18"
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 
 [lints]
