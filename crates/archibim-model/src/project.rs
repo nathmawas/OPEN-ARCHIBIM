@@ -78,8 +78,8 @@ pub struct Project {
     /// Guides placed by hand, to draw against.
     pub guides: Vec<Guide>,
     junctions: Vec<(Id, Id, JunctionMode)>,
-    /// Walls, columns and beams cut under a roof: the element, then the
-    /// roof.
+    /// Walls, columns and beams cut under a roof or interrupted by a slab:
+    /// the element, then the roof or the slab.
     cuts: Vec<(Id, Id)>,
 }
 
@@ -431,13 +431,14 @@ impl Project {
         Ok(())
     }
 
-    /// Removes a slab.
+    /// Removes a slab, and the cuts it makes.
     pub fn remove_slab(&mut self, id: Id) -> Result<Slab, ModelError> {
         let at = self
             .slabs
             .iter()
             .position(|e| e.id == id)
             .ok_or(ModelError::NotFound(id))?;
+        self.cuts.retain(|(_, by)| *by != id);
         Ok(self.slabs.remove(at))
     }
 
@@ -659,35 +660,37 @@ impl Project {
     }
 
     /// Every cut: a wall, a column or a beam, then the roof it is cut
-    /// under.
+    /// under or the slab that interrupts it.
     pub fn cuts(&self) -> &[(Id, Id)] {
         &self.cuts
     }
 
-    /// The roofs an element is cut under.
+    /// The roofs and slabs that cut an element.
     pub fn cuts_of(&self, element: Id) -> impl Iterator<Item = Id> + '_ {
         self.cuts
             .iter()
             .filter(move |(e, _)| *e == element)
-            .map(|(_, roof)| *roof)
+            .map(|(_, by)| *by)
     }
 
-    /// Cuts a wall, a column or a beam under a roof, or stops cutting it.
-    /// Returns whether it was cut before.
-    pub fn set_cut(&mut self, element: Id, roof: Id, on: bool) -> Result<bool, ModelError> {
-        self.roof(roof)?;
+    /// Cuts a wall, a column or a beam under a roof or by a slab, or stops
+    /// cutting it. Returns whether it was cut before.
+    pub fn set_cut(&mut self, element: Id, by: Id, on: bool) -> Result<bool, ModelError> {
+        if self.roof(by).is_err() {
+            self.slab(by)?;
+        }
         if self.wall(element).is_err()
             && self.column(element).is_err()
             && self.beam(element).is_err()
         {
             return Err(ModelError::Invalid(
-                "only walls, columns and beams are cut under a roof",
+                "only walls, columns and beams are cut by a roof or a slab",
             ));
         }
-        let before = self.cuts.contains(&(element, roof));
-        self.cuts.retain(|c| *c != (element, roof));
+        let before = self.cuts.contains(&(element, by));
+        self.cuts.retain(|c| *c != (element, by));
         if on {
-            self.cuts.push((element, roof));
+            self.cuts.push((element, by));
         }
         Ok(before)
     }

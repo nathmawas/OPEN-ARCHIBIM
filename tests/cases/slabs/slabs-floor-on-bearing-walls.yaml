@@ -1,0 +1,38 @@
+id: slabs-floor-on-bearing-walls
+title: A floor slab taken from the walls bears on their load-bearing layers
+status: proposed
+given: |
+  Story 0 at level 0, story 1 at 2800. A 10 x 6 m rectangle of outside
+  walls drawn clockwise, from level 0 up to story 1, split by a partition.
+  Either with external insulation: render 20, insulation 140, concrete 200
+  (load-bearing), plaster 15. Or with internal insulation: render 20, brick
+  200 (load-bearing), insulation 100, plaster 15.
+when: |
+  With the slab tool set to "on the bearing walls", the architect
+  holds the space bar and clicks inside one of the rooms. The slab is on
+  story 1, its top at the structural level, concrete 200.
+expect:
+  - The outline goes around the whole group of walls, the partition
+    crossed, on the exterior face of the load-bearing layers - inset 160
+    with external insulation, 20 with internal insulation.
+  - The same click with the choice "inner faces" gives the inner
+    faces of the room, as before.
+  - On the walls of the slab's story, or else of the story under it.
+  - The slab is joined to the walls it passes through, in the same undo
+    step. Each layer of a joined wall that lies inside the slab's outline
+    stops under the slab and starts again on top; the layers in front of
+    the slab's edge (insulation and render, or render alone) go on whole,
+    so the facade reads as the wall, not as the edge of the slab.
+  - The walls keep their own heights; the join follows the slab when it
+    changes. Deleting the slab makes the walls whole again; undo brings
+    the slab back with its joins.
+  - The slab's properties offer to join the walls, columns and beams it
+    passes through, and to unjoin them; a joined wall offers to unjoin.
+    Roofs use the same words.
+  - When no walls are found around the pointer, the room or the slab under
+    it is taken as with "inner faces", and nothing is joined.
+  - The plan does not change.
+  - Not yet - one junction tool for every element; options per layer of
+    what goes on and what stops; a slab edge across a layer is split only
+    for a convex outline; an annex joined to the house is taken in, an
+    inner courtyard is filled; the join in IFC export.

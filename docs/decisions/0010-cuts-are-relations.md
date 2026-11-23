@@ -27,6 +27,14 @@ another, or only what two volumes share).
 - Cutting under a roof keeps what is under the roof's underside, pane by
   pane, and leaves the rest of the element as it was. It never stretches
   an element up to the roof. The plan does not change.
+- A slab cuts too (added 2026-11-23). What lies inside its outline is
+  interrupted over its thickness, kept below and above; what lies in front
+  of its edge, such as external insulation or render, goes on whole. The
+  kind of the element that cuts sets the behaviour; no mode is stored yet.
+- A slab drawn from the floor contour, on the walls' load-bearing layers,
+  is joined in the same undo step to the walls, columns and beams it
+  passes through. The interface calls every cut a join, ready for one
+  junction command over every kind of element.
 
 ## Consequences
 

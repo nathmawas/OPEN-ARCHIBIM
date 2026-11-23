@@ -229,6 +229,77 @@ fn inside(polygon: &[Point]) -> Vec<impl Fn(Point) -> f64 + use<>> {
         .collect()
 }
 
+/// A block interrupted by a slab running from `bottom` to `top`: what lies
+/// inside the slab's outline is kept under and over the slab; what lies
+/// outside it, such as insulation or render passing in front of the slab's
+/// edge, is kept whole.
+// ponytail: split exactly along a convex outline; a concave one takes each
+// block whole by its middle, which holds when the edge follows the wall's
+// layer faces (the floor contour). A sloped top crossing the slab is met
+// corner by corner.
+pub fn cut_by_slab(block: &Block, outline: &[Point], bottom: f64, top: f64) -> Vec<Block> {
+    let interrupt = |b: &Block| {
+        let corners = || b.bottom.iter().zip(&b.top);
+        let under = Block {
+            top: corners().map(|(&lo, &hi)| hi.min(bottom).max(lo)).collect(),
+            ..b.clone()
+        };
+        let over = Block {
+            bottom: corners().map(|(&lo, &hi)| lo.max(top).min(hi)).collect(),
+            ..b.clone()
+        };
+        [under, over]
+            .into_iter()
+            .filter(|p| p.bottom.iter().zip(&p.top).any(|(lo, hi)| hi - lo > 1e-6))
+            .collect::<Vec<_>>()
+    };
+    if !convex(outline) {
+        let n = block.outline.len().max(1) as f64;
+        let middle = block
+            .outline
+            .iter()
+            .fold(Point::new(0.0, 0.0), |s, p| add(s, mul(*p, 1.0 / n)));
+        return if crate::contains(outline, middle) {
+            interrupt(block)
+        } else {
+            vec![block.clone()]
+        };
+    }
+    let edges = inside(outline);
+    let mut pieces = Vec::new();
+    // Outside edge k and inside the edges before it: each part of the block
+    // outside the outline, once.
+    for k in 0..edges.len() {
+        let mut part = Some(block.clone());
+        for e in &edges[..k] {
+            part = part.and_then(|b| clip_block(&b, |p, _, _| -e(p)));
+        }
+        if let Some(out) = part.and_then(|b| clip_block(&b, |p, _, _| edges[k](p))) {
+            pieces.push(out);
+        }
+    }
+    let mut within = Some(block.clone());
+    for e in &edges {
+        within = within.and_then(|b| clip_block(&b, |p, _, _| -e(p)));
+    }
+    pieces.extend(within.iter().flat_map(interrupt));
+    pieces
+}
+
+/// Whether a closed polygon turns always the same way.
+fn convex(polygon: &[Point]) -> bool {
+    let n = polygon.len();
+    let turns: Vec<f64> = (0..n)
+        .map(|k| {
+            let (a, b, c) = (polygon[k], polygon[(k + 1) % n], polygon[(k + 2) % n]);
+            let (u, v) = (sub(b, a), sub(c, b));
+            u.x * v.y - u.y * v.x
+        })
+        .filter(|t| t.abs() > 1e-9)
+        .collect();
+    n >= 3 && (turns.iter().all(|&t| t > 0.0) || turns.iter().all(|&t| t < 0.0))
+}
+
 /// A block cut under a roof whose eaves level is at `eaves`: where the
 /// roof's underside is lower than the block's top, the top follows it,
 /// pane by pane; where it is lower than the bottom, nothing is left; out

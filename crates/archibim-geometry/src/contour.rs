@@ -1,7 +1,7 @@
 //! The contour around a point: the inner faces of a loop of walls, or the
 //! outline of a slab. Used to draw a slab or walls on what already exists.
 
-use archibim_model::{Id, Point, Project};
+use archibim_model::{Id, LayerRole, Point, Project};
 
 use crate::{Line, TOL, add, contains, cross, dot, intersect, length, mul, polygon_area, sub};
 
@@ -11,7 +11,7 @@ use crate::{Line, TOL, add, contains, cross, dot, intersect, length, mul, polygo
 // ponytail: straight walls only, and walls must meet end to end or end on
 // another wall; walls crossing each other do not split the loop yet.
 pub fn contour_at(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
-    wall_loop(project, story, p).or_else(|| {
+    wall_loop(project, story, p, false).or_else(|| {
         project
             .slabs
             .iter()
@@ -23,6 +23,30 @@ pub fn contour_at(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> 
             })
             .map(|s| anticlockwise(s.outline.clone()))
     })
+}
+
+/// The floor contour of story `story` around `p`: the outer boundary of
+/// the walls joined around it, partitions inside crossed, each wall's edge
+/// on the exterior face of its load-bearing layers (or of a framed layer);
+/// a wall with neither gives its inner face. Anticlockwise.
+// ponytail: the whole group of joined walls, annexes included, and an
+// inner courtyard is filled; pick by levels or holes when it matters.
+pub fn floor_contour_at(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
+    wall_loop(project, story, p, true)
+}
+
+/// The outline without its corners that do not turn, such as where a wall
+/// meets the outline from outside.
+fn straight(points: Vec<Point>) -> Vec<Point> {
+    let n = points.len();
+    let kept: Vec<Point> = (0..n)
+        .filter(|&i| {
+            let (a, b, c) = (points[(i + n - 1) % n], points[i], points[(i + 1) % n]);
+            cross(sub(b, a), sub(c, b)).abs() > 1e-6 * length(sub(b, a)) * length(sub(c, b))
+        })
+        .map(|i| points[i])
+        .collect();
+    if kept.len() >= 3 { kept } else { points }
 }
 
 fn anticlockwise(mut points: Vec<Point>) -> Vec<Point> {
@@ -46,9 +70,14 @@ struct Edge {
     to: usize,
     /// The face on the left of `from` to `to`, then the one on the right.
     faces: [Line; 2],
+    /// The line a floor follows when the outside is on the left of `from`
+    /// to `to`, then when it is on the right.
+    bearing: [Line; 2],
 }
 
-fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
+/// `floor`: the outer boundary at the bearing faces, else the smallest
+/// room at the inner faces.
+fn wall_loop(project: &Project, story: Id, p: Point, floor: bool) -> Option<Vec<Point>> {
     let walls: Vec<_> = project
         .walls
         .iter()
@@ -101,6 +130,20 @@ fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
             p: add(a, mul(r, w.thickness())),
             d,
         };
+        // The bearing layers: load-bearing, or framed like a timber frame.
+        let bears =
+            |l: &&archibim_model::Layer| l.role == LayerRole::LoadBearing || l.framing.is_some();
+        let before = |k: usize| w.layers[..k].iter().map(|l| l.thickness).sum::<f64>();
+        let at = |s: f64| Line {
+            p: add(a, mul(r, s)),
+            d,
+        };
+        let first = w.layers.iter().position(|l| bears(&l));
+        let last = w.layers.iter().rposition(|l| bears(&l));
+        let bearing = match (first, last) {
+            (Some(i), Some(j)) => [at(before(i)), at(before(j + 1))],
+            _ => [right, left],
+        };
         let mut along: Vec<Point> = cuts[i].clone();
         along[0] = ends[i][0];
         along[1] = ends[i][1];
@@ -112,6 +155,7 @@ fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
                     from,
                     to,
                     faces: [left, right],
+                    bearing,
                 });
                 let reverse = |l: Line| Line {
                     p: l.p,
@@ -121,6 +165,7 @@ fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
                     from: to,
                     to: from,
                     faces: [reverse(right), reverse(left)],
+                    bearing: [reverse(bearing[1]), reverse(bearing[0])],
                 });
             }
         }
@@ -135,6 +180,7 @@ fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
             from: edges[e].to,
             to: edges[e].from,
             faces: edges[e].faces,
+            bearing: edges[e].bearing,
         });
         let at = edges[e].to;
         edges
@@ -174,17 +220,30 @@ fn wall_loop(project: &Project, story: Id, p: Point) -> Option<Vec<Point>> {
         }
         let corners: Vec<Point> = cycle.iter().map(|&k| nodes[edges[k].from]).collect();
         let area = signed_area(&corners);
-        if corners.len() < 3 || area <= 0.0 || !contains(&corners, p) {
+        // A room is walked anticlockwise, the outer boundary of a group of
+        // walls clockwise.
+        let outer = area < 0.0;
+        if corners.len() < 3 || outer != floor || area == 0.0 || !contains(&corners, p) {
             continue;
         }
-        // The inner faces, met corner to corner.
+        // The inner faces, or the bearing faces, met corner to corner.
         let n = cycle.len();
-        let faces: Vec<Line> = cycle.iter().map(|&k| edges[k].faces[0]).collect();
+        let faces: Vec<Line> = cycle
+            .iter()
+            .map(|&k| {
+                if floor {
+                    edges[k].bearing[0]
+                } else {
+                    edges[k].faces[0]
+                }
+            })
+            .collect();
         let outline: Vec<Point> = (0..n)
             .filter_map(|i| intersect(faces[(i + n - 1) % n], faces[i]))
             .collect();
+        let area = area.abs();
         if outline.len() >= 3 && best.as_ref().is_none_or(|(a, _)| area < *a) {
-            best = Some((area, outline));
+            best = Some((area, anticlockwise(straight(outline))));
         }
     }
     best.map(|(_, outline)| outline)
@@ -272,6 +331,25 @@ mod tests {
             contour_at(&p, story, Point::new(-5000.0, 0.0)).is_none(),
             "outside"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_floor_contour_crosses_partitions_to_the_bearing_faces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (p, story) = project()?;
+        // From either room, the same outline: the whole bearing wall, the
+        // partition crossed.
+        for at in [Point::new(2000.0, 3000.0), Point::new(7000.0, 3000.0)] {
+            let c = floor_contour_at(&p, story, at).ok_or("no contour")?;
+            let (x0, y0, x1, y1) = bounds(&c);
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+            assert_eq!(c.len(), 4, "{c:?}");
+            assert!(near(x0, -100.0) && near(x1, 10100.0), "{c:?}");
+            assert!(near(y0, -100.0) && near(y1, 6100.0), "{c:?}");
+            assert!(signed_area(&c) > 0.0, "anticlockwise");
+        }
+        assert!(floor_contour_at(&p, story, Point::new(-5000.0, 0.0)).is_none());
         Ok(())
     }
 

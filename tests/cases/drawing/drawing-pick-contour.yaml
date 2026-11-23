@@ -10,10 +10,14 @@ when: |
 expect:
   - While the space bar is held, the contour that would be taken is shown
     dashed under the pointer.
-  - Inside a room, the contour is the inner faces of the walls around it,
-    partitions included; each room gives its own contour.
+  - With the slab tool set to "inner faces", and always with the
+    wall tool, inside a room the contour is the inner faces of the walls
+    around it, partitions included; each room gives its own contour.
   - Where no walls enclose the pointer, the outline of the slab under it is
     taken.
+  - With the slab tool set to "on the bearing walls" (its default),
+    the contour goes around the whole group of walls on their load-bearing
+    layers (see slabs-floor-on-bearing-walls).
   - With the slab tool, the click makes a slab on that contour, in one
     undo step.
   - With the wall tool, the click makes walls all around the contour, on

@@ -11,12 +11,12 @@ mod wall_tool;
 
 use archibim_commands::{Command, History};
 use archibim_geometry::{
-    LayerPlan, beam_outline, column_outline, contains, contour_at, opening_outline, roof_faces,
-    roof_overhang, stair_steps,
+    LayerPlan, beam_outline, column_outline, contains, contour_at, cuts_through, floor_contour_at,
+    opening_outline, roof_faces, roof_overhang, stair_steps,
 };
 use archibim_model::{
     Beam, Column, Guide, GuideShape, Id, Layer, Mesh, MeshPoint, Opening, Point, Project, Roof,
-    Slab, Stair, Wall,
+    Slab, Stair, Story, Wall,
 };
 use egui::{Key, Modifiers, Sense, Ui};
 
@@ -150,6 +150,11 @@ pub struct Workspace {
     wall: WallTool,
     slab_points: Vec<Point>,
     slab_method: SlabMethod,
+    /// Space and click with the slab tool takes the floor, on the bearing
+    /// walls, rather than the room.
+    floor_contour: bool,
+    /// The outline being closed came from the floor contour.
+    joining: bool,
     beam_start: Option<Point>,
     /// Each beam starts where the last one ended.
     beam_chain: bool,
@@ -207,6 +212,8 @@ impl Workspace {
             templates,
             slab_points: Vec::new(),
             slab_method: SlabMethod::Polygon,
+            floor_contour: true,
+            joining: false,
             beam_start: None,
             beam_chain: false,
             door: false,
@@ -711,6 +718,14 @@ impl Workspace {
                 ] {
                     ui.selectable_value(&mut self.slab_method, method, t(key));
                 }
+                if self.tool == Tool::Slab {
+                    ui.separator();
+                    ui.label(t("contour.space"));
+                    ui.selectable_value(&mut self.floor_contour, true, t("contour.floor"))
+                        .on_hover_text(t("contour.floor_hint"));
+                    ui.selectable_value(&mut self.floor_contour, false, t("contour.room"))
+                        .on_hover_text(t("contour.room_hint"));
+                }
             }
             Tool::Beam => {
                 ui.selectable_value(&mut self.beam_chain, false, t("method.single"));
@@ -916,7 +931,32 @@ impl Workspace {
             Tool::Mesh => Some(self.templates.mesh.story),
             _ => None,
         };
+        let floor = self.tool == Tool::Slab && self.floor_contour;
+        // The floor contour was found, not the room or slab taken instead.
+        let mut on_bearing = false;
         let contour = match (space, outline_story, self.tool, response.hover_pos()) {
+            (true, Some(story), _, Some(p)) if floor => {
+                // On the walls of its story, or else of the story below,
+                // which an upper floor bears on.
+                let project = history.project();
+                let level = |s: &Story| s.finished_level;
+                let below = project
+                    .story(story)
+                    .ok()
+                    .and_then(|s| {
+                        project
+                            .stories
+                            .iter()
+                            .filter(|o| level(o) < level(s))
+                            .max_by(|a, b| level(a).total_cmp(&level(b)))
+                    })
+                    .map(|s| s.id);
+                let at = self.view.model(p);
+                let found = floor_contour_at(project, story, at)
+                    .or_else(|| below.and_then(|b| floor_contour_at(project, b, at)));
+                on_bearing = found.is_some();
+                found.or_else(|| contour_at(project, story, at))
+            }
             (true, Some(story), _, Some(p)) => {
                 contour_at(history.project(), story, self.view.model(p))
             }
@@ -933,6 +973,7 @@ impl Workspace {
                     Tool::Wall => self.wall.outline(history, outline),
                     _ => {
                         self.slab_points = outline;
+                        self.joining = on_bearing;
                         self.close_outline(history)
                     }
                 };
@@ -1204,11 +1245,18 @@ impl Workspace {
                 outline: outline.iter().map(|&at| MeshPoint { at, z: 0.0 }).collect(),
                 ..self.templates.mesh.clone()
             }),
-            _ => Command::AddSlab(Slab {
-                id,
-                outline,
-                ..self.templates.slab.clone()
-            }),
+            _ => {
+                let slab = Slab {
+                    id,
+                    outline,
+                    ..self.templates.slab.clone()
+                };
+                if std::mem::take(&mut self.joining) {
+                    joined_slab(history.project(), slab)
+                } else {
+                    Command::AddSlab(slab)
+                }
+            }
         };
         self.run(history, command)
     }
@@ -1333,6 +1381,30 @@ fn screen_scale(points_per_mm: f32) -> Option<u32> {
 
 /// The reference after B: a reference to pick, or none if one was asked
 /// for already; one taken by resting (`auto`) gives way to a new pick.
+/// A new slab with the walls, columns and beams it passes through joined
+/// to it, in one undo step.
+fn joined_slab(project: &Project, slab: Slab) -> Command {
+    let id = slab.id;
+    let mut after = project.clone();
+    let through = archibim_commands::apply(&mut after, Command::AddSlab(slab.clone()))
+        .ok()
+        .and_then(|_| cuts_through(&after, id).ok())
+        .unwrap_or_default();
+    if through.is_empty() {
+        return Command::AddSlab(slab);
+    }
+    let joins = through.into_iter().map(|element| Command::SetCut {
+        element,
+        by: id,
+        on: true,
+    });
+    Command::Group(
+        std::iter::once(Command::AddSlab(slab))
+            .chain(joins)
+            .collect(),
+    )
+}
+
 fn asked_reference(current: Option<Option<Point>>, auto: bool) -> Option<Option<Point>> {
     match current {
         Some(_) if !auto => None,

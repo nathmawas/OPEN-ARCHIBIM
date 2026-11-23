@@ -6,9 +6,9 @@
 
 use archibim_commands::{Command, History};
 use archibim_geometry::{
-    LayerPlan, Phase, beam_outline, column_outline, mesh_blocks, mesh_contours, mesh_triangles,
-    model_blocks, model_prisms, plan_layers, polygon_area, roof_blocks, roof_cuts, roof_faces,
-    roof_overhang, stair_steps,
+    LayerPlan, Phase, beam_outline, column_outline, contour_at, cuts_through, floor_contour_at,
+    mesh_blocks, mesh_contours, mesh_triangles, model_blocks, model_prisms, plan_layers,
+    polygon_area, roof_blocks, roof_faces, roof_overhang, stair_steps,
 };
 use archibim_model::{
     Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, JunctionMode, Layer,
@@ -1686,17 +1686,20 @@ fn roofs_walls_cut_under() -> Result {
     // degree slope, rising 1 for 1 to the ridge at y = 3000.
     let low = 2_800.0 - 300.0 / 45f64.to_radians().cos();
     // The roof offers to cut the two walls rising through it.
-    assert_eq!(roof_cuts(f.h.project(), roof_id)?, vec![walls[0], walls[1]]);
+    assert_eq!(
+        cuts_through(f.h.project(), roof_id)?,
+        vec![walls[0], walls[1]]
+    );
     let cuts: Vec<Command> = walls
         .iter()
         .map(|&element| Command::SetCut {
             element,
-            roof: roof_id,
+            by: roof_id,
             on: true,
         })
         .collect();
     f.h.run(Command::Group(cuts))?;
-    assert!(roof_cuts(f.h.project(), roof_id)?.is_empty(), "all cut");
+    assert!(cuts_through(f.h.project(), roof_id)?.is_empty(), "all cut");
     let (lo, hi) = tops(f.h.project(), walls[0])?;
     assert!(near(lo, low) && near(hi, low + 3_000.0), "gable: {lo} {hi}");
     let (lo, hi) = tops(f.h.project(), walls[1])?;
@@ -1752,7 +1755,7 @@ fn roofs_walls_cut_under() -> Result {
     }))?;
     f.h.run(Command::SetCut {
         element: column,
-        roof: roof_id,
+        by: roof_id,
         on: true,
     })?;
     let (_, hi) = tops(f.h.project(), column)?;
@@ -1760,7 +1763,7 @@ fn roofs_walls_cut_under() -> Result {
     assert!(
         f.h.run(Command::SetCut {
             element: roof_id,
-            roof: roof_id,
+            by: roof_id,
             on: true
         })
         .is_err()
@@ -1835,14 +1838,14 @@ fn roofs_walls_cut_under_edge_cases() -> Result {
     // The strips over the head of the door are cut with the rest.
     f.h.run(Command::SetCut {
         element: id,
-        roof: high,
+        by: high,
         on: true,
     })?;
     assert!(close(top_of(f.h.project())?, 2_500.0));
     // Two roofs: the lower one wins, in either order.
     f.h.run(Command::SetCut {
         element: id,
-        roof: low,
+        by: low,
         on: true,
     })?;
     assert!(close(top_of(f.h.project())?, 1_500.0));
@@ -1862,7 +1865,7 @@ fn roofs_walls_cut_under_edge_cases() -> Result {
     // Cutting twice under the same roof is one cut.
     f.h.run(Command::SetCut {
         element: id,
-        roof: low,
+        by: low,
         on: true,
     })?;
     assert_eq!(f.h.project().cuts().len(), 2);
@@ -1885,7 +1888,7 @@ fn roofs_walls_cut_under_edge_cases() -> Result {
         assert!(
             f.h.run(Command::SetCut {
                 element,
-                roof,
+                by: roof,
                 on: true
             })
             .is_err()
@@ -1902,7 +1905,7 @@ fn roofs_walls_cut_under_edge_cases() -> Result {
     f.h.run(Command::ReplaceWall(a))?;
     f.h.run(Command::SetCut {
         element: arc,
-        roof: sloped,
+        by: sloped,
         on: true,
     })?;
     for b in model_blocks(f.h.project(), Phase::Proposed)?
@@ -1914,5 +1917,407 @@ fn roofs_walls_cut_under_edge_cases() -> Result {
             assert!(b.top[k] <= 6_300.0 + 1e-6);
         }
     }
+    Ok(())
+}
+
+#[test]
+fn slabs_floor_on_bearing_walls() -> Result {
+    // Layers from the outside in, the load-bearing one, and where the slab
+    // edge sits from the outside face.
+    for (outside, inset) in [(true, 160.0), (false, 20.0)] {
+        let mut f = Fixture::new()?;
+        let render = f.material("render", 1)?;
+        let insulation = f.material("insulation", 3)?;
+        let bearing = f.material("bearing", 9)?;
+        let plaster = f.material("plaster", 1)?;
+        let layers = if outside {
+            vec![
+                layer_of(LayerRole::Finish, render, 20.0),
+                layer_of(LayerRole::Insulation, insulation, 140.0),
+                layer_of(LayerRole::LoadBearing, bearing, 200.0),
+                layer_of(LayerRole::Finish, plaster, 15.0),
+            ]
+        } else {
+            vec![
+                layer_of(LayerRole::Finish, render, 20.0),
+                layer_of(LayerRole::LoadBearing, bearing, 200.0),
+                layer_of(LayerRole::Insulation, insulation, 100.0),
+                layer_of(LayerRole::Finish, plaster, 15.0),
+            ]
+        };
+        // Clockwise, the first layer outside.
+        let mut walls = Vec::new();
+        for (a, b) in [
+            ((0.0, 0.0), (0.0, 6_000.0)),
+            ((0.0, 6_000.0), (10_000.0, 6_000.0)),
+            ((10_000.0, 6_000.0), (10_000.0, 0.0)),
+            ((10_000.0, 0.0), (0.0, 0.0)),
+        ] {
+            walls.push(f.wall_with(a, b, layers.clone())?);
+        }
+        let t: f64 = layers.iter().map(|l| l.thickness).sum();
+        let partition = f.wall((4_000.0, t), (4_000.0, 6_000.0 - t), &[(bearing, 100.0)])?;
+
+        let at = Point::new(2_000.0, 3_000.0);
+        let outline = floor_contour_at(f.h.project(), f.story0, at).ok_or("no floor contour")?;
+        let (x0, y0, x1, y1) = outline.iter().fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(a, b, c, d), q| (a.min(q.x), b.min(q.y), c.max(q.x), d.max(q.y)),
+        );
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert_eq!(outline.len(), 4, "{outline:?}");
+        assert!(near(x0, inset) && near(y0, inset), "{outline:?}");
+        assert!(near(x1, 10_000.0 - inset) && near(y1, 6_000.0 - inset));
+        let room = contour_at(f.h.project(), f.story0, at).ok_or("no room")?;
+        assert!(
+            room.iter()
+                .all(|q| q.x >= t - 1e-6 && q.x <= 4_000.0 + 1e-6)
+        );
+
+        let slab = Slab {
+            id: f.h.new_id(),
+            story: f.story1,
+            outline,
+            layers: vec![layer_of(LayerRole::LoadBearing, bearing, 200.0)],
+            top: LevelRef {
+                story: f.story1,
+                kind: LevelKind::Structural,
+                offset: 0.0,
+            },
+        };
+        let id = slab.id;
+        f.h.run(Command::AddSlab(slab))?;
+        let mut through = walls.clone();
+        through.push(partition);
+        assert_eq!(cuts_through(f.h.project(), id)?, through);
+        let joins = through
+            .iter()
+            .map(|&element| Command::SetCut {
+                element,
+                by: id,
+                on: true,
+            })
+            .collect();
+        f.h.run(Command::Group(joins))?;
+        assert!(cuts_through(f.h.project(), id)?.is_empty(), "all joined");
+
+        // The highest top of each layer role of the first wall.
+        let tops = |p: &Project| -> std::result::Result<Vec<(LayerRole, f64)>, Box<dyn std::error::Error>> {
+            let mut t: Vec<(LayerRole, f64)> = Vec::new();
+            for b in model_blocks(p, Phase::Proposed)?
+                .into_iter()
+                .filter(|b| b.element == walls[0])
+            {
+                let role = b.role.ok_or("a wall layer has a role")?;
+                let top = b.top.iter().copied().fold(f64::MIN, f64::max);
+                match t.iter_mut().find(|(r, _)| *r == role) {
+                    Some((_, h)) => *h = h.max(top),
+                    None => t.push((role, top)),
+                }
+            }
+            Ok(t)
+        };
+        let top_of = |t: &[(LayerRole, f64)], role| t.iter().find(|(r, _)| *r == role).map(|x| x.1);
+        let joined = tops(f.h.project())?;
+        // The bearing layer and what is inside stop under the slab; the
+        // render, and the insulation outside, go on to the top.
+        assert_eq!(top_of(&joined, LayerRole::LoadBearing), Some(2_600.0));
+        let insulation_top = if outside { 2_800.0 } else { 2_600.0 };
+        assert_eq!(top_of(&joined, LayerRole::Insulation), Some(insulation_top));
+        assert_eq!(top_of(&joined, LayerRole::Finish), Some(2_800.0), "render");
+
+        // Deleting the slab releases the walls; undo brings the joins back.
+        f.h.run(Command::RemoveSlab(id))?;
+        assert!(f.h.project().cuts().is_empty());
+        assert_eq!(
+            top_of(&tops(f.h.project())?, LayerRole::LoadBearing),
+            Some(2_800.0)
+        );
+        f.h.undo()?;
+        assert_eq!(f.h.project().cuts().len(), through.len());
+        assert_eq!(tops(f.h.project())?, joined);
+    }
+    Ok(())
+}
+
+fn floor_slab(f: &mut Fixture, outline: Vec<Point>, material: Id) -> Slab {
+    Slab {
+        id: f.h.new_id(),
+        story: f.story1,
+        outline,
+        layers: vec![layer_of(LayerRole::LoadBearing, material, 200.0)],
+        top: LevelRef {
+            story: f.story1,
+            kind: LevelKind::Structural,
+            offset: 0.0,
+        },
+    }
+}
+
+/// Bottom, highest top, and x range of a piece.
+type Piece = (f64, f64, f64, f64);
+
+/// The pieces of an element.
+fn pieces_of(p: &Project, id: Id) -> std::result::Result<Vec<Piece>, Box<dyn std::error::Error>> {
+    Ok(model_blocks(p, Phase::Proposed)?
+        .into_iter()
+        .filter(|b| b.element == id)
+        .map(|b| {
+            let xs = b.outline.iter().map(|q| q.x);
+            (
+                b.bottom.iter().copied().fold(f64::MAX, f64::min),
+                b.top.iter().copied().fold(f64::MIN, f64::max),
+                xs.clone().fold(f64::MAX, f64::min),
+                xs.fold(f64::MIN, f64::max),
+            )
+        })
+        .collect())
+}
+
+fn ring(f: &mut Fixture, layers: Vec<Layer>) -> Result {
+    for (a, b) in [
+        ((0.0, 0.0), (0.0, 6_000.0)),
+        ((0.0, 6_000.0), (10_000.0, 6_000.0)),
+        ((10_000.0, 6_000.0), (10_000.0, 0.0)),
+        ((10_000.0, 0.0), (0.0, 0.0)),
+    ] {
+        f.wall_with(a, b, layers.clone())?;
+    }
+    Ok(())
+}
+
+fn floor_inset(f: &Fixture) -> std::result::Result<f64, Box<dyn std::error::Error>> {
+    let c = floor_contour_at(f.h.project(), f.story0, Point::new(2_000.0, 3_000.0))
+        .ok_or("no floor contour")?;
+    Ok(c.iter().map(|q| q.x).fold(f64::MAX, f64::min))
+}
+
+#[test]
+fn slabs_floor_contour_edge_cases() -> Result {
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    // No bearing layer: the inner face.
+    let mut f = Fixture::new()?;
+    let m = f.material("m", 5)?;
+    ring(
+        &mut f,
+        vec![
+            layer_of(LayerRole::Finish, m, 20.0),
+            layer_of(LayerRole::Insulation, m, 100.0),
+            layer_of(LayerRole::Finish, m, 15.0),
+        ],
+    )?;
+    assert!(near(floor_inset(&f)?, 135.0), "{}", floor_inset(&f)?);
+    // A framed layer bears like a load-bearing one.
+    let mut g = Fixture::new()?;
+    let m = g.material("m", 5)?;
+    let mut framed = layer_of(LayerRole::Insulation, m, 140.0);
+    framed.framing = Some(Framing {
+        material: m,
+        width: 45.0,
+        spacing: 600.0,
+    });
+    ring(
+        &mut g,
+        vec![
+            layer_of(LayerRole::Finish, m, 20.0),
+            framed,
+            layer_of(LayerRole::Finish, m, 15.0),
+        ],
+    )?;
+    assert!(near(floor_inset(&g)?, 20.0), "{}", floor_inset(&g)?);
+    // A dangling wall sticking out of the group leaves the outline alone.
+    let at = Point::new(2_000.0, 3_000.0);
+    let before = floor_contour_at(g.h.project(), g.story0, at).ok_or("none")?;
+    let bearing = vec![layer_of(LayerRole::LoadBearing, m, 200.0)];
+    g.wall_with((10_000.0, 3_000.0), (14_000.0, 3_000.0), bearing)?;
+    let after = floor_contour_at(g.h.project(), g.story0, at).ok_or("none after")?;
+    assert!(after.iter().all(|q| q.x < 10_000.0), "{after:?}");
+    assert!(before.len() <= after.len());
+    Ok(())
+}
+
+#[test]
+fn slabs_floor_on_bearing_walls_edge_cases() -> Result {
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    let mut f = Fixture::new()?;
+    let m = f.material("m", 5)?;
+    // A wall across the slab's edge, one under the slab, one whose top is
+    // the slab's bottom, a column, a beam.
+    let across = f.wall((-3_000.0, 3_000.0), (5_000.0, 3_000.0), &[(m, 200.0)])?;
+    let inside = f.wall((2_000.0, 1_000.0), (2_000.0, 2_000.0), &[(m, 200.0)])?;
+    let low = f.wall((2_500.0, 1_000.0), (2_500.0, 2_000.0), &[(m, 200.0)])?;
+    let mut w = f.h.project().wall(low)?.clone();
+    w.top.offset = -200.0;
+    f.h.run(Command::ReplaceWall(w))?;
+    let wall = f.h.project().wall(across)?.clone();
+    let column = f.h.new_id();
+    f.h.run(Command::AddColumn(Column {
+        id: column,
+        story: f.story0,
+        at: Point::new(5_000.0, 4_000.0),
+        anchor: Anchor::default(),
+        angle: 0.0,
+        width: 300.0,
+        depth: 300.0,
+        round: false,
+        material: m,
+        bottom: wall.bottom,
+        top: wall.top,
+    }))?;
+    let beam = f.h.new_id();
+    f.h.run(Command::AddBeam(Beam {
+        id: beam,
+        story: f.story1,
+        start: Point::new(1_000.0, 5_000.0),
+        end: Point::new(4_000.0, 5_000.0),
+        anchor: Anchor::default(),
+        width: 200.0,
+        height: 400.0,
+        material: m,
+        level: LevelRef {
+            story: f.story1,
+            kind: LevelKind::Structural,
+            offset: 0.0,
+        },
+    }))?;
+    let slab = floor_slab(&mut f, rect_outline(10_000.0, 6_000.0), m);
+    let id = slab.id;
+    f.h.run(Command::AddSlab(slab.clone()))?;
+    let through = cuts_through(f.h.project(), id)?;
+    assert!(through.contains(&across), "{through:?}");
+    assert!(through.contains(&inside) && through.contains(&column));
+    assert!(!through.contains(&low), "top = slab bottom: not joined");
+    assert!(through.contains(&beam), "{through:?}");
+    // Joined in one step: undo and redo of the group.
+    let joins: Vec<Command> = through
+        .iter()
+        .map(|&element| Command::SetCut {
+            element,
+            by: id,
+            on: true,
+        })
+        .collect();
+    f.h.run(Command::Group(joins))?;
+    let n = through.len();
+    assert_eq!(f.h.project().cuts().len(), n);
+    f.h.undo()?;
+    assert!(f.h.project().cuts().is_empty());
+    f.h.redo()?;
+    assert_eq!(f.h.project().cuts().len(), n);
+    // Across the edge: the part outside goes whole, the part inside stops
+    // under the slab.
+    let parts = pieces_of(f.h.project(), across)?;
+    assert!(
+        parts.iter().any(|&(lo, hi, x0, x1)| near(lo, 0.0)
+            && near(hi, 2_800.0)
+            && x1 <= 1e-6
+            && x0 < -2_999.0),
+        "whole outside: {parts:?}"
+    );
+    assert!(
+        parts
+            .iter()
+            .all(|&(_, hi, x0, _)| x0 < -1e-6 || hi <= 2_600.0 + 1e-6),
+        "{parts:?}"
+    );
+    let low_top = pieces_of(f.h.project(), low)?
+        .iter()
+        .map(|p| p.1)
+        .fold(0.0, f64::max);
+    assert_eq!(low_top, 2_600.0, "untouched");
+    // Moving the slab away: the joined elements are reported, nothing is
+    // left to interrupt; undo brings it back.
+    let mut moved = slab.clone();
+    moved.outline = moved
+        .outline
+        .iter()
+        .map(|q| Point::new(q.x + 50_000.0, q.y))
+        .collect();
+    let changed = f.h.run(Command::ReplaceSlab(moved))?;
+    assert!(changed.contains(&across) && changed.contains(&id));
+    let gone = pieces_of(f.h.project(), across)?;
+    assert!(gone.iter().all(|p| near(p.1, 2_800.0)), "{gone:?}");
+    f.h.undo()?;
+    let back = pieces_of(f.h.project(), across)?;
+    assert!(back.iter().any(|p| near(p.1, 2_600.0)), "{back:?}");
+    // RemoveSlab reports what it frees; undo brings the joins back.
+    let changed = f.h.run(Command::RemoveSlab(id))?;
+    assert!(changed.contains(&across) && changed.contains(&column));
+    assert!(f.h.project().cuts().is_empty());
+    f.h.undo()?;
+    assert_eq!(f.h.project().cuts().len(), n);
+    // A roof and a slab on the same wall: both apply.
+    let roof = Roof {
+        id: f.h.new_id(),
+        story: f.story1,
+        outline: rect_outline(10_000.0, 6_000.0),
+        edges: vec![
+            RoofEdge {
+                slope: None,
+                overhang: 0.0
+            };
+            4
+        ],
+        layers: vec![layer_of(LayerRole::LoadBearing, m, 300.0)],
+        eaves: LevelRef {
+            story: f.story1,
+            kind: LevelKind::Finished,
+            offset: -1_000.0,
+        },
+        plane: RoofPlane::Top,
+    };
+    let rid = roof.id;
+    f.h.run(Command::AddRoof(roof))?;
+    f.h.run(Command::SetCut {
+        element: across,
+        by: rid,
+        on: true,
+    })?;
+    let tops: Vec<f64> = pieces_of(f.h.project(), across)?
+        .iter()
+        .map(|p| p.1)
+        .collect();
+    assert!(tops.iter().any(|&t| t < 1_800.0 + 1e-6), "roof: {tops:?}");
+    assert!(tops.iter().any(|&t| near(t, 2_800.0)), "outside: {tops:?}");
+    // Only a roof or a slab cuts.
+    assert!(
+        f.h.run(Command::SetCut {
+            element: across,
+            by: across,
+            on: true
+        })
+        .is_err()
+    );
+
+    // A concave (L-shaped) slab: a wall in the notch is left alone, one in
+    // an arm is interrupted.
+    let mut f = Fixture::new()?;
+    let m = f.material("m", 5)?;
+    let notch = f.wall((8_000.0, 5_000.0), (9_000.0, 5_000.0), &[(m, 200.0)])?;
+    let arm = f.wall((2_000.0, 5_000.0), (3_000.0, 5_000.0), &[(m, 200.0)])?;
+    let l: Vec<Point> = [
+        (0.0, 0.0),
+        (10_000.0, 0.0),
+        (10_000.0, 3_000.0),
+        (5_000.0, 3_000.0),
+        (5_000.0, 6_000.0),
+        (0.0, 6_000.0),
+    ]
+    .iter()
+    .map(|&(x, y)| Point::new(x, y))
+    .collect();
+    let slab = floor_slab(&mut f, l, m);
+    let id = slab.id;
+    f.h.run(Command::AddSlab(slab))?;
+    assert_eq!(cuts_through(f.h.project(), id)?, vec![arm]);
+    f.h.run(Command::SetCut {
+        element: arm,
+        by: id,
+        on: true,
+    })?;
+    let arm_tops = pieces_of(f.h.project(), arm)?;
+    assert!(arm_tops.iter().all(|p| p.1 <= 2_600.0 + 1e-6));
+    let notch_tops = pieces_of(f.h.project(), notch)?;
+    assert!(notch_tops.iter().all(|p| near(p.1, 2_800.0)));
     Ok(())
 }

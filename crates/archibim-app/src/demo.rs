@@ -353,7 +353,26 @@ pub fn house() -> Result<(History, Id, Templates)> {
         h.run(Command::ReplaceWall(w))?;
         h.run(Command::SetCut {
             element: wall,
-            roof: id,
+            by: id,
+            on: true,
+        })?;
+    }
+    // The first floor bears on the concrete of the outside walls, the
+    // insulation and render passing in front of its edge; the walls under
+    // it are joined to it.
+    let floor = h.new_id();
+    let (o, i) = (160.0, 10000.0 - 160.0);
+    h.run(Command::AddSlab(Slab {
+        id: floor,
+        story: first,
+        outline: points(&[(o, -o), (o, -8000.0 + o), (i, -8000.0 + o), (i, -o)]),
+        top: level(first, 0.0),
+        ..templates.slab.clone()
+    }))?;
+    for element in archibim_geometry::cuts_through(h.project(), floor)? {
+        h.run(Command::SetCut {
+            element,
+            by: floor,
             on: true,
         })?;
     }
