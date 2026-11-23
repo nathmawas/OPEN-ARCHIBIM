@@ -2,8 +2,9 @@ id: walls-reference-line
 title: A wall is placed on its reference line, which stays put when the build-up changes
 status: proposed
 given: |
-  The architect draws walls on a chosen reference line: the left face, the
-  axis, the right face, or a face of the load-bearing layers (for example
+  The architect draws walls on a chosen reference line: the exterior face
+  (left of the drawing direction, outside when drawn clockwise), the axis,
+  the interior face, or a face of the load-bearing layers (for example
   the outside face of the concrete, under the insulation).
 when: |
   The architect draws the wall, then changes its thickness or its build-up,

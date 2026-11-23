@@ -191,10 +191,11 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> E
     match element {
         Element::Wall(w) => {
             ui.label(t("el.wall"));
-            build_up(ui, e, &mut w.layers, materials, "buildup.layers");
+            build_up(ui, e, w.id, &mut w.layers, materials, "buildup.layers");
             number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
-            ui.label(t("settings.reference"));
+            ui.label(t("settings.reference"))
+                .on_hover_text(t("ref.side_hint"));
             number(ui, e, "p.ref_offset", &mut w.offset, -1.0e6);
             for (reference, key) in [
                 (WallReference::LeftFace, "ref.left"),
@@ -208,7 +209,7 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> E
         }
         Element::Slab(s) => {
             ui.label(t("el.slab"));
-            build_up(ui, e, &mut s.layers, materials, "buildup.layers_slab");
+            build_up(ui, e, s.id, &mut s.layers, materials, "buildup.layers_slab");
             number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
         }
         Element::Column(c) => {
@@ -275,7 +276,7 @@ fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
         .edges
         .iter()
         .find_map(|edge| edge.slope)
-        .unwrap_or(35f64.to_radians());
+        .unwrap_or(45f64.to_radians());
     for (i, edge) in r.edges.iter_mut().enumerate() {
         if numbered {
             ui.separator();
@@ -325,7 +326,7 @@ fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
         ui.colored_label(ui.visuals().warn_fg_color, t("roof.concave_warning"));
     }
     ui.separator();
-    build_up(ui, e, &mut r.layers, materials, "buildup.layers_slab");
+    build_up(ui, e, r.id, &mut r.layers, materials, "buildup.layers_slab");
 }
 
 /// Whether a closed outline turns the same way at every corner.
@@ -474,6 +475,7 @@ fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material]) {
 fn build_up(
     ui: &mut Ui,
     e: &mut Edit,
+    owner: Id,
     layers: &mut Vec<Layer>,
     materials: &[Material],
     title: &'static str,
@@ -535,9 +537,18 @@ fn build_up(
         layers.swap(i - 1, i);
         e.commit = true;
     }
+    let built = |l: &Layer| l.status != RenovationStatus::New;
+    // Removing or merging layers that are already built loses their
+    // renovation status: asked first, never refused.
+    let confirm_id = egui::Id::unique("buildup_confirm").with(owner.0);
+    let mut confirm: Option<Change> = ui.data(|d| d.get_temp(confirm_id));
     if let Some(i) = remove {
-        layers.remove(i);
-        e.commit = true;
+        if layers.get(i).is_some_and(built) {
+            confirm = Some(Change::Remove(i));
+        } else {
+            layers.remove(i);
+            e.commit = true;
+        }
     }
     if !simple {
         ui.label(format!(
@@ -546,31 +557,114 @@ fn build_up(
             layers.iter().map(|l| l.thickness).sum::<f64>()
         ));
     }
+    // A new layer has no thickness of its own: the architect types it
+    // before the layer is added.
+    // ponytail: the tool templates all have id 0, so a half-typed layer
+    // follows from one tool's settings to another; key it by tool too if
+    // that gets in the way.
+    let adding_id = egui::Id::unique("buildup_adding").with(owner.0);
+    let mut adding: Option<String> = ui.data(|d| d.get_temp(adding_id));
     ui.horizontal(|ui| {
-        if ui.button(t("buildup.add")).clicked()
-            && let Some(last) = layers.last()
-        {
-            // A thin finish on the right face, of the last material; the
-            // architect then sets it.
-            layers.push(Layer {
-                role: LayerRole::Finish,
-                thickness: 15.0,
-                status: RenovationStatus::New,
-                framing: None,
-                ..*last
-            });
-            e.commit = true;
+        if adding.is_none() && ui.button(t("buildup.add")).clicked() {
+            adding = Some(String::new());
         }
         if !simple && ui.button(t("buildup.make_simple")).clicked() {
-            *layers = vec![simplified(layers)];
-            e.commit = true;
+            if layers.iter().any(built) {
+                confirm = Some(Change::Simplify);
+            } else {
+                *layers = vec![simplified(layers)];
+                e.commit = true;
+            }
         }
     });
-    // Alert, never refuse: removing or merging layers that are already
-    // built loses their renovation status.
-    if !simple && layers.iter().any(|l| l.status != RenovationStatus::New) {
+    if let Some(text) = &mut adding {
+        let mut close = false;
+        ui.horizontal(|ui| {
+            ui.label(t("buildup.new_thickness"));
+            let r = ui.add(
+                egui::TextEdit::singleline(text)
+                    .desired_width(60.0)
+                    .hint_text("mm"),
+            );
+            let thickness = crate::typed::number(text).filter(|v| *v > 0.0);
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let ok = ui
+                .add_enabled(thickness.is_some(), egui::Button::new(t("buildup.add_ok")))
+                .clicked();
+            if let (Some(thickness), true, Some(last)) = (thickness, ok || enter, layers.last()) {
+                // On the interior face, of the last material.
+                layers.push(Layer {
+                    role: LayerRole::Finish,
+                    thickness,
+                    status: RenovationStatus::New,
+                    framing: None,
+                    ..*last
+                });
+                e.commit = true;
+                close = true;
+            }
+            if ui
+                .small_button("×")
+                .on_hover_text(t("buildup.add_cancel"))
+                .clicked()
+            {
+                close = true;
+            }
+        });
+        if close {
+            adding = None;
+        }
+    }
+    ui.data_mut(|d| match adding {
+        Some(s) => {
+            d.insert_temp(adding_id, s);
+        }
+        None => d.remove::<String>(adding_id),
+    });
+    if !simple && layers.iter().any(built) {
         ui.colored_label(ui.visuals().warn_fg_color, t("buildup.renovation_warning"));
     }
+    if let Some(change) = confirm {
+        let mut answered = false;
+        egui::Modal::new(confirm_id.with("modal")).show(ui.ctx(), |ui| {
+            ui.label(t(match change {
+                Change::Remove(_) => "buildup.confirm_remove",
+                Change::Simplify => "buildup.confirm_merge",
+            }));
+            ui.horizontal(|ui| {
+                if ui.button(t("buildup.confirm_yes")).clicked() {
+                    match change {
+                        Change::Remove(i) if i < layers.len() => {
+                            layers.remove(i);
+                        }
+                        Change::Remove(_) => {}
+                        Change::Simplify => *layers = vec![simplified(layers)],
+                    }
+                    e.commit = true;
+                    answered = true;
+                }
+                if ui.button(t("buildup.confirm_no")).clicked() {
+                    answered = true;
+                }
+            });
+        });
+        if answered {
+            confirm = None;
+        }
+    }
+    ui.data_mut(|d| match confirm {
+        Some(c) => {
+            d.insert_temp(confirm_id, c);
+        }
+        None => d.remove::<Change>(confirm_id),
+    });
+}
+
+/// A change to a build-up that waits for the architect's yes.
+#[derive(Clone, Copy)]
+enum Change {
+    Remove(usize),
+    Simplify,
 }
 
 /// One layer standing for a whole build-up: its total thickness, in the

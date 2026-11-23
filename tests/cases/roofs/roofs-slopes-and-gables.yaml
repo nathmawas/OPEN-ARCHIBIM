@@ -7,7 +7,8 @@ given: |
 when: |
   The architect draws the roof outline on the wall line, as for a slab
   (polygon or rectangle, or the space bar on a contour). Every edge starts
-  with the slope and overhang of the settings.
+  with the slope and overhang of the settings: 45 degrees and 400 for a new
+  roof, set by hand afterwards.
 expect:
   - One sloped edge gives a shed roof, two opposite ones a gabled roof, all
     of them a hipped roof; ridges and hips come out of the slopes, nothing
@@ -16,8 +17,9 @@ expect:
     the eaves level.
   - An edge made a gable stops the roof on a vertical cut; an overhang pushes
     the roof out past the edge and lower, along its slope.
-  - The eaves level gives either the top or the underside of the build-up,
-    as the architect chooses; layer thicknesses are square to the slope.
+  - The eaves level gives the top of the roof at its lowest point (the top
+    of the build-up) for a new roof, or the underside, as the architect
+    chooses; layer thicknesses are square to the slope.
   - In plan the roof shows its overhang, its ridges and hips, and the wall
     line dashed.
   - A slope between flat and vertical, any overhang, and an

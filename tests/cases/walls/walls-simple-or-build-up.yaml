@@ -12,7 +12,12 @@ expect:
   - A simple wall shows one material and one thickness, with no layer
     roles to set.
   - A layer can be added to a simple wall; it becomes a build-up, and each
-    layer shows its role, material and thickness, with the total.
+    layer shows its role, material and thickness, with the total. A new
+    layer has no thickness of its own: the architect types it, and the
+    layer goes on the interior face, of the last material.
+  - The faces are named exterior and interior, never left and right.
+  - Removing or merging a layer that is existing or to demolish asks for a
+    yes first; it is never refused.
   - A layer can be moved up or removed; the last layer cannot be removed.
   - A build-up made simple keeps its total thickness, in the material of
     its load-bearing layer, or of its thickest layer if none carries loads.

@@ -1,5 +1,5 @@
 id: window-layout
-title: The window has a menu at the top, the tools on the left, the settings on the right and the display at the bottom
+title: The window has a menu and the drawing aids at the top, the tools on the left, the settings on the right and the display at the bottom
 status: proposed
 given: |
   The application is open on a project.
@@ -10,7 +10,8 @@ expect:
   - Top - a menu bar - File, Edit, View, Help. Edit holds undo, redo and
     delete, each greyed when it cannot act, with its keyboard shortcut.
     View holds fit to window, zoom in and out, plan, 3D or both, the placed
-    guides, and the tools and settings panels, each of which can be hidden.
+    guides, and the drawing aids bar, the tools and settings panels, each
+    of which can be hidden.
     Help tells the name, licence and version.
   - File shows new, open, save, save as and IFC export greyed, the pointer
     on them saying they are not there yet; quit works.
@@ -20,8 +21,10 @@ expect:
   - Left - only the tools that work, in groups - selection, the elements
     of the model, the guides. The window or door choice shows under the
     opening tool when it is active.
+  - Under the menu - a bar of drawing aids in a row: what the pointer
+    snaps to, the snapped angles, the divisions, halfway and the reference.
   - Right - the active tool's settings, or the selected element's
-    properties, then the drawing aids, which fold away.
+    properties.
   - Bottom - a status line with the pointer's x and y in millimetres in
     the plan and the hint of the tool, and a display bar - plan, 3D or
     both, fit to window, zoom out and in, the plan's approximate size on

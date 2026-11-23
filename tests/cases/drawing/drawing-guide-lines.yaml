@@ -1,9 +1,10 @@
 id: drawing-guide-lines
-title: An edge the pointer passes over offers guide lines
+title: An edge the pointer rests on offers guide lines
 status: proposed
 given: |
-  A wall face at 30 degrees, 4000 long. The pointer has passed over it, so
-  it is picked up; the two last edges passed over stay picked up.
+  A wall face at 30 degrees, 4000 long. The pointer has rested on it for
+  0.4 s, so it is picked up; an edge only passed over is not. The two last
+  edges picked up stay picked up.
 when: |
   The architect moves the pointer, or draws a wall from a point 2000 away
   from the face.

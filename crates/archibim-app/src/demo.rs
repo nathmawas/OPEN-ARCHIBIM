@@ -250,7 +250,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
             story: ground,
             outline: Vec::new(),
             edges: vec![RoofEdge {
-                slope: Some(35f64.to_radians()),
+                slope: Some(45f64.to_radians()),
                 overhang: 400.0,
             }],
             layers: vec![
@@ -259,7 +259,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
                 layer(LayerRole::LoadBearing, timber, 60.0),
             ],
             eaves: level(first, 0.0),
-            plane: RoofPlane::Bottom,
+            plane: RoofPlane::Top,
         },
         mesh: Mesh {
             id: Id(0),
@@ -328,8 +328,12 @@ pub fn house() -> Result<(History, Id, Templates)> {
         (10000.0, -8000.0),
         (0.0, -8000.0),
     ]);
-    // Sloped on the long sides, gables on the short ones.
-    let sloped = templates.roof.edges[0];
+    // Sloped on the long sides, gables on the short ones; the eaves level
+    // gives the underside, on the top of the walls.
+    let sloped = RoofEdge {
+        slope: Some(35f64.to_radians()),
+        overhang: 400.0,
+    };
     let gable = RoofEdge {
         slope: None,
         overhang: 150.0,
@@ -339,6 +343,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
         id,
         edges: vec![sloped, gable, sloped, gable],
         outline: main,
+        plane: RoofPlane::Bottom,
         ..templates.roof.clone()
     }))?;
     // The annex: one plane, low on its far side.
@@ -363,6 +368,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
                 overhang: 0.0,
             },
         ],
+        plane: RoofPlane::Bottom,
         ..templates.roof.clone()
     }))?;
     // A quarter-turn stair in the corner room, up to the first floor.

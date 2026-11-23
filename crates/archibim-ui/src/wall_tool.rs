@@ -149,7 +149,9 @@ impl WallTool {
                 let r = distance(last, p);
                 let east = Point::new(last.x + r, last.y);
                 let west = Point::new(last.x - r, last.y);
-                let half = std::f64::consts::PI;
+                // Clockwise, like an outline, so that the first layer is
+                // outside.
+                let half = -std::f64::consts::PI;
                 let commands = vec![
                     Command::AddWall(self.curved(history, east, west, half)),
                     Command::AddWall(self.curved(history, west, east, half)),
@@ -509,6 +511,7 @@ mod tests {
         for w in &walls {
             let (c, r) = w.arc().ok_or("not curved")?;
             assert!(close(c, Point::new(0.0, 0.0)) && (r - 2000.0).abs() < 1e-6);
+            assert!(w.sweep < 0.0, "clockwise, the first layer outside");
         }
         h.undo()?;
         assert!(h.project().walls.is_empty(), "one undo");

@@ -7,7 +7,7 @@ given: |
   beam, slab, roof, terrain or stair tool; a first point is placed.
 when: |
   The architect moves the pointer near the curved wall, near the middle of
-  any edge, types a length or an angle after Tab, or asks for the point
+  any edge, types a length, an angle or an x and y offset, or asks for the point
   halfway between two points.
 expect:
   - Near the curved wall, the pointer lands on its arc, its faces and the
@@ -23,11 +23,22 @@ expect:
     apply to all of them.
   - With every tool that places a point (column and opening included),
     digits typed give the length of the next segment towards the pointer;
-    Tab switches to the angle and back. The angle is in degrees, turned
+    Tab goes on to the angle, then x, then y, and back to the length; X or
+    Y goes straight to that offset. The angle is in degrees, turned
     anticlockwise from the previous segment carried on: 0 goes straight on,
     90 turns left, -90 turns right; the first segment turns from the x
     axis. A typed value holds while the other follows the pointer; a
     click, or Enter, places the point.
+  - x and y are offsets from the last point, or from the reference, along
+    the plan: x to the right, y up the plan, either may be negative. A
+    typed x or y holds while the pointer gives the other; x and y together
+    place the point exactly and win over a length or an angle. A length
+    with x (or y) gives the other offset on the pointer's side; an angle
+    with x (or y) gives the length that reaches it. Before the first point,
+    x and y measure from the plan's origin. A length shorter than the
+    offset, an angle that never reaches it, a length and an angle both with
+    one offset, or no move at all place nothing
+    and the values show as a warning; nothing is guessed.
   - Directions snap to the angles chosen in the drawing aids and their
     multiples - 30, 45, 60 and 90 by default, 15 on demand, and one more
     angle of the architect's choice; with none chosen, the axes.

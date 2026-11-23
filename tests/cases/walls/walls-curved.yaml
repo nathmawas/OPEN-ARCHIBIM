@@ -8,7 +8,8 @@ when: |
   circle) or the arc method (centre, start, end), or the rotated rectangle
   (one side, then the depth).
 expect:
-  - A circle gives two half-circle walls on the same centre and radius, in
+  - A circle gives two half-circle walls on the same centre and radius,
+    running clockwise so that the exterior face is outside, in
     one undo step.
   - An arc follows the pointer round its centre, past a half circle if the
     pointer goes there, and ends on the circle. Without moving round, it

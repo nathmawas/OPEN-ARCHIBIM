@@ -6,7 +6,7 @@ given: |
   Nothing is selected, so the properties palette shows the tool settings.
 when: |
   The architect picks a drawing method (single wall, chain, rectangle) and a
-  reference line (left face, axis, right face), sets the thickness and the
+  reference line (exterior face, axis, interior face), sets the thickness and the
   heights in the palette, then clicks in the plan.
 expect:
   - Single wall, two clicks give one wall and the tool stops.

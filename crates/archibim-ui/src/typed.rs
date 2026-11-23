@@ -1,11 +1,23 @@
-//! Lengths and angles typed at the keyboard while drawing, shared by every
-//! drawing tool: the next point at a typed distance from the last one, along
-//! a typed angle or towards the pointer, or, before the first point, at a
-//! typed distance along the guide the pointer is on.
+//! Values typed at the keyboard while drawing, shared by every drawing
+//! tool: a length, an angle and offsets in x and y, alone or together. The
+//! next point goes at a typed distance from the last one, along a typed
+//! angle or towards the pointer, or at typed offsets along the plan's axes.
+//! Before the first point, a typed length runs along the guide the pointer
+//! is on, and typed offsets measure from the plan's origin.
 
 use archibim_model::Point;
 
 use crate::Snap;
+
+/// The value being typed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Field {
+    #[default]
+    Length,
+    Angle,
+    X,
+    Y,
+}
 
 /// What was typed for the next point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -15,31 +27,67 @@ pub struct Typed {
     /// from the x axis for the first segment: 0 goes straight on, 90
     /// turns left, -90 turns right.
     angle: String,
-    /// Typing goes to the angle rather than the length.
-    on_angle: bool,
+    /// Offsets from the last point (or the reference) along the plan's
+    /// axes: x to the right, y up the plan.
+    x: String,
+    y: String,
+    field: Field,
 }
 
 impl Typed {
     /// Whether nothing was typed.
     pub fn is_empty(&self) -> bool {
-        self.length.is_empty() && self.angle.is_empty() && !self.on_angle
+        self.length.is_empty()
+            && self.angle.is_empty()
+            && self.x.is_empty()
+            && self.y.is_empty()
+            && self.field == Field::Length
     }
 
     /// What to show next to the pointer, given `live`, the length and the
-    /// angle from the last point if there is one: with nothing typed, the
-    /// live values; else each typed value, the live ones in brackets, and
-    /// a bar after the value being typed.
-    pub fn label(&self, live: Option<(f64, f64)>) -> String {
-        let bar = |on: bool| if on { "|" } else { "" };
+    /// angle from the last point if there is one, and `offset`, the
+    /// pointer's x and y from it: with nothing typed, the live values; else
+    /// each typed value, the live ones in brackets, and a bar after the
+    /// value being typed. The offsets show on a second line once used.
+    pub fn label(&self, live: Option<(f64, f64)>, offset: Option<(f64, f64)>) -> String {
+        let polar = self.polar_label(live);
+        if self.x.is_empty() && self.y.is_empty() && !matches!(self.field, Field::X | Field::Y) {
+            return polar;
+        }
+        let value = |typed: &str, live: Option<f64>, field| {
+            let v = match live {
+                Some(v) if typed.is_empty() => format!("({v:.0})"),
+                _ => typed.to_owned(),
+            };
+            format!("{v}{}", if self.field == field { "|" } else { "" })
+        };
+        let offsets = format!(
+            "x {}  y {}",
+            value(&self.x, offset.map(|o| o.0), Field::X),
+            value(&self.y, offset.map(|o| o.1), Field::Y)
+        );
+        if polar.is_empty() {
+            offsets
+        } else {
+            format!("{polar}\n{offsets}")
+        }
+    }
+
+    /// The length and angle part of the label.
+    fn polar_label(&self, live: Option<(f64, f64)>) -> String {
+        let bar = |field| if self.field == field { "|" } else { "" };
         let length = match (self.length.is_empty(), live) {
             (false, _) => self.length.clone(),
             (true, Some((l, _))) => format!("({l:.0})"),
             (true, None) => String::new(),
         };
+        let untouched =
+            self.length.is_empty() && self.angle.is_empty() && self.field != Field::Angle;
         match live {
+            None if self.length.is_empty() && self.field != Field::Length => String::new(),
             None if self.is_empty() => String::new(),
-            None => format!("{length}{}", bar(!self.on_angle)),
-            Some((l, a)) if self.is_empty() => format!("{l:.0}  {a:.1}°"),
+            None => format!("{length}{}", bar(Field::Length)),
+            Some((l, a)) if untouched => format!("{l:.0}  {a:.1}°"),
             Some((_, a)) => {
                 let angle = if self.angle.is_empty() {
                     format!("({a:.1}°)")
@@ -48,8 +96,8 @@ impl Typed {
                 };
                 format!(
                     "{length}{} < {angle}{}",
-                    bar(!self.on_angle),
-                    bar(self.on_angle)
+                    bar(Field::Length),
+                    bar(Field::Angle)
                 )
             }
         }
@@ -60,12 +108,16 @@ impl Typed {
         number(&self.length).filter(|l| *l > 0.0)
     }
 
-    /// Tab or `<`: typing goes to the angle, or back to the length. An
-    /// angle needs a point to turn around.
+    /// Tab or `<`: typing goes to the next value, length, angle, x, y and
+    /// back to the length. An angle needs a point to turn around, so it is
+    /// skipped before the first point.
     pub fn switch_field(&mut self, drawing: bool) {
-        if drawing {
-            self.on_angle = !self.on_angle;
-        }
+        self.field = match self.field {
+            Field::Length if drawing => Field::Angle,
+            Field::Length | Field::Angle => Field::X,
+            Field::X => Field::Y,
+            Field::Y => Field::Length,
+        };
     }
 
     /// Forgets what was typed.
@@ -73,29 +125,41 @@ impl Typed {
         *self = Self::default();
     }
 
-    /// A typed character: digits and a decimal separator build the length,
-    /// or the angle after `<`, which may be negative.
+    /// The value being typed.
+    fn active(&mut self) -> &mut String {
+        match self.field {
+            Field::Length => &mut self.length,
+            Field::Angle => &mut self.angle,
+            Field::X => &mut self.x,
+            Field::Y => &mut self.y,
+        }
+    }
+
+    /// A typed character: digits and a decimal separator build the value
+    /// being typed; `<` goes to the next value, `x` and `y` straight to
+    /// that offset. The angle and the offsets may be negative.
     pub fn type_char(&mut self, c: char, drawing: bool) {
         match c {
             '<' => self.switch_field(drawing),
-            '-' if self.on_angle && self.angle.is_empty() => self.angle.push(c),
-            c if c.is_ascii_digit() || c == '.' || c == ',' => {
-                if self.on_angle {
-                    self.angle.push(c);
-                } else {
-                    self.length.push(c);
-                }
+            'x' | 'X' => self.field = Field::X,
+            'y' | 'Y' => self.field = Field::Y,
+            '-' if self.field != Field::Length && self.active().is_empty() => {
+                self.active().push(c);
             }
+            c if c.is_ascii_digit() || c == '.' || c == ',' => self.active().push(c),
             _ => {}
         }
     }
 
-    /// Backspace: erases the last typed character.
+    /// Backspace: erases the last typed character, or goes back to the
+    /// value before once this one is empty.
     pub fn erase(&mut self) {
-        if !self.on_angle {
-            self.length.pop();
-        } else if self.angle.pop().is_none() {
-            self.on_angle = false;
+        if self.active().pop().is_none() {
+            self.field = match self.field {
+                Field::Y => Field::X,
+                Field::X if !self.angle.is_empty() => Field::Angle,
+                _ => Field::Length,
+            };
         }
     }
 
@@ -104,10 +168,16 @@ impl Typed {
     /// along the typed angle, turned from `base`, the direction in degrees
     /// of the previous segment (0 with none), or towards the pointer; with
     /// an angle and no length, the pointer's distance along that angle.
-    /// Before the first point: the typed length along the guide the
-    /// pointer is on, from where the guide starts.
+    /// A typed x or y fixes the point along the plan's axes, the pointer
+    /// giving what was not typed. Before the first point: the typed length
+    /// along the guide the pointer is on, from where the guide starts, or
+    /// the typed offsets from the plan's origin.
     pub fn point(&self, start: Option<Point>, base: f64, snap: &Snap) -> Option<Point> {
         let (length, angle) = (number(&self.length), number(&self.angle));
+        let (x, y) = (number(&self.x), number(&self.y));
+        if x.is_some() || y.is_some() {
+            return offset_point(start, base, snap.point, length, angle, x, y);
+        }
         let Some(start) = start else {
             let (origin, u) = snap.along?;
             let l = length.filter(|l| *l > 0.0)?;
@@ -137,8 +207,59 @@ impl Typed {
     }
 }
 
+/// The point fixed by a typed x or y, from `start` or the plan's origin,
+/// with the length or the angle if one was typed too; x and y together win
+/// over both, and the pointer `toward` gives the rest. A length shorter
+/// than the offset, an angle that never reaches it, or no move at all give
+/// no point: the label warns, nothing is guessed.
+fn offset_point(
+    start: Option<Point>,
+    base: f64,
+    toward: Point,
+    length: Option<f64>,
+    angle: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+) -> Option<Point> {
+    let origin = start.unwrap_or(Point::new(0.0, 0.0));
+    let (px, py) = (toward.x - origin.x, toward.y - origin.y);
+    let side = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
+    // An angle turns from the previous segment, so it needs a point.
+    let direction = angle
+        .filter(|_| start.is_some())
+        .map(|a| (base + a).to_radians());
+    let (dx, dy) = match (x, y, length.filter(|l| *l > 0.0), direction) {
+        (Some(x), Some(y), ..) => (x, y),
+        (Some(x), None, Some(l), None) if l >= x.abs() => (x, side(py) * (l * l - x * x).sqrt()),
+        (None, Some(y), Some(l), None) if l >= y.abs() => (side(px) * (l * l - y * y).sqrt(), y),
+        // Too short, or a length and an angle both with one offset: one
+        // value too many, nothing guessed.
+        (Some(_), None, Some(_), _) | (None, Some(_), Some(_), _) => return None,
+        (Some(x), None, None, Some(a)) => {
+            let l = x / a.cos();
+            if a.cos().abs() < 1e-9 || l <= 0.0 {
+                return None;
+            }
+            (x, l * a.sin())
+        }
+        (None, Some(y), None, Some(a)) => {
+            let l = y / a.sin();
+            if a.sin().abs() < 1e-9 || l <= 0.0 {
+                return None;
+            }
+            (l * a.cos(), y)
+        }
+        (Some(x), None, None, None) => (x, py),
+        (None, Some(y), None, None) => (px, y),
+        (None, None, ..) => return None,
+    };
+    // A zero move places nothing, except at the plan's origin itself.
+    let moved = dx.hypot(dy) > 1e-9;
+    (moved || start.is_none()).then(|| Point::new(origin.x + dx, origin.y + dy))
+}
+
 /// A typed number, a comma or a dot as the decimal separator.
-fn number(s: &str) -> Option<f64> {
+pub(crate) fn number(s: &str) -> Option<f64> {
     s.replace(',', ".")
         .parse::<f64>()
         .ok()
@@ -180,7 +301,7 @@ mod tests {
         let start = Some(Point::new(0.0, 0.0));
         let mut t = Typed::default();
         "2000<90".chars().for_each(|c| t.type_char(c, true));
-        assert_eq!(t.label(Some((500.0, 0.0))), "2000 < 90°|");
+        assert_eq!(t.label(Some((500.0, 0.0)), None), "2000 < 90°|");
         let p = t.point(start, 0.0, &at(500.0, 0.0));
         assert!(p.is_some_and(|p| close(p, 0.0, 2000.0)), "{p:?}");
         // An angle alone: the pointer gives the length along it.
@@ -224,10 +345,101 @@ mod tests {
         let p = t.point(None, 0.0, &on_guide);
         assert!(p.is_some_and(|p| close(p, 1000.0, 1500.0)), "{p:?}");
         assert!(t.point(None, 0.0, &at(5.0, 5.0)).is_none(), "off any guide");
-        // No angle without a point to turn around.
+        // No angle without a point to turn around: Tab goes to x.
         t.switch_field(false);
         "90".chars().for_each(|c| t.type_char(c, false));
-        assert_eq!(t.label(None), "150090|");
+        assert_eq!(t.label(None, Some((5.0, 6.0))), "1500\nx 90|  y (6)");
+    }
+
+    fn keys(keys: &str, drawing: bool) -> Typed {
+        let mut t = Typed::default();
+        keys.chars().for_each(|c| t.type_char(c, drawing));
+        t
+    }
+
+    #[test]
+    fn typed_offsets_fix_the_point_along_the_plan_axes() {
+        let start = Some(Point::new(100.0, 100.0));
+        let pointer = at(400.0, -300.0);
+        // (keys, expected point): x and y from the last point, the pointer
+        // giving what was not typed.
+        for (k, x, y) in [
+            ("x300y-200", 400.0, -100.0),
+            ("x-50", 50.0, -300.0),
+            ("y250", 400.0, 350.0),
+            ("x0", 100.0, -300.0),
+            // A length with x: y on the pointer's side, below here.
+            ("500x300", 400.0, -300.0),
+            ("500y-400", 400.0, -300.0),
+            // x and y win over the length.
+            ("9999x10y20", 110.0, 120.0),
+        ] {
+            let p = keys(k, true).point(start, 0.0, &pointer);
+            assert!(p.is_some_and(|p| close(p, x, y)), "{k}: {p:?}");
+        }
+        // An angle with x: the length reaches that x along the angle.
+        let p = keys("<45x1000", true).point(start, 0.0, &pointer);
+        assert!(p.is_some_and(|p| close(p, 1100.0, 1100.0)), "{p:?}");
+        let p = keys("<45y-1000", true).point(start, 180.0, &pointer);
+        assert!(p.is_some_and(|p| close(p, -900.0, -900.0)), "{p:?}");
+    }
+
+    #[test]
+    fn offsets_that_give_no_point_place_nothing() {
+        let start = Some(Point::new(0.0, 0.0));
+        let pointer = at(10.0, 10.0);
+        for k in [
+            "x0y0",       // no move
+            "100x300",    // shorter than x
+            "100y-101",   // shorter than y
+            "<90x100",    // straight up never reaches x
+            "<0y100",     // along x never reaches y
+            "<45x-100",   // x behind the angle
+            "500<45x300", // a length, an angle and x: one too many
+            "x-",         // a lone minus
+            "x.",         // a lone dot
+        ] {
+            assert!(keys(k, true).point(start, 0.0, &pointer).is_none(), "{k}");
+        }
+        // The pointer on the start: x alone keeps y = 0, still a move.
+        let p = keys("x100", true).point(start, 0.0, &at(0.0, 0.0));
+        assert!(p.is_some_and(|p| close(p, 100.0, 0.0)), "{p:?}");
+    }
+
+    #[test]
+    fn before_the_first_point_offsets_measure_from_the_origin() {
+        let p = keys("x1500y-200", false).point(None, 0.0, &at(5.0, 5.0));
+        assert!(p.is_some_and(|p| close(p, 1500.0, -200.0)), "{p:?}");
+        let p = keys("x0y0", false).point(None, 0.0, &at(5.0, 5.0));
+        assert!(p.is_some_and(|p| close(p, 0.0, 0.0)), "the origin itself");
+        // x alone: y from the pointer.
+        let p = keys("x700", false).point(None, 0.0, &at(5.0, 6.0));
+        assert!(p.is_some_and(|p| close(p, 700.0, 6.0)), "{p:?}");
+        // Tab before the first point skips the angle.
+        let mut t = Typed::default();
+        t.switch_field(false);
+        "3".chars().for_each(|c| t.type_char(c, false));
+        assert_eq!(t.label(None, Some((1.0, 2.0))), "x 3|  y (2)");
+    }
+
+    #[test]
+    fn tab_cycles_the_values_and_backspace_goes_back() {
+        let mut t = keys("1000", true);
+        for want in [
+            "1000 < (0.0°)|",
+            "1000 < (0.0°)\nx (5)|  y (6)",
+            "1000 < (0.0°)\nx (5)  y (6)|",
+            "1000| < (0.0°)",
+        ] {
+            t.switch_field(true);
+            assert_eq!(t.label(Some((7.0, 0.0)), Some((5.0, 6.0))), want);
+        }
+        // y typed, then erased back through x to the length.
+        let mut t = keys("x1y2", true);
+        (0..2).for_each(|_| t.erase());
+        assert_eq!(t.label(None, Some((0.0, 0.0))), "x 1|  y (0)");
+        (0..2).for_each(|_| t.erase());
+        assert!(t.is_empty(), "{t:?}");
     }
 
     #[test]
@@ -262,13 +474,17 @@ mod tests {
         // Letters and a second minus are dropped.
         let mut t = Typed::default();
         "a1b-2".chars().for_each(|c| t.type_char(c, true));
-        assert_eq!(t.label(Some((7.0, 45.0))), "12| < (45.0°)");
+        assert_eq!(t.label(Some((7.0, 45.0)), None), "12| < (45.0°)");
         t.switch_field(true);
         "--3".chars().for_each(|c| t.type_char(c, true));
-        assert_eq!(t.label(Some((7.0, 45.0))), "12 < -3°|");
+        assert_eq!(t.label(Some((7.0, 45.0)), None), "12 < -3°|");
         t.clear();
-        assert_eq!(t.label(Some((7.0, 45.0))), "7  45.0°", "nothing typed");
-        assert_eq!(t.label(None), "");
+        assert_eq!(
+            t.label(Some((7.0, 45.0)), None),
+            "7  45.0°",
+            "nothing typed"
+        );
+        assert_eq!(t.label(None, None), "");
     }
 
     #[test]

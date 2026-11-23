@@ -158,7 +158,7 @@ pub struct Workspace {
     properties: Properties,
     message: Option<String>,
     snap_options: SnapOptions,
-    /// Edges the pointer passed over, most recent first, for guide lines.
+    /// Edges the pointer rested on, most recent first, for guide lines.
     picked: Vec<(Point, Point)>,
     /// Length and angle typed for the next point.
     typed: Typed,
@@ -177,6 +177,11 @@ pub struct Workspace {
     reference_auto: bool,
     /// The point the pointer rests on, and since when.
     resting: Option<(Point, f64)>,
+    /// The edge the pointer stops on, where, and since when, before it is
+    /// picked up.
+    edge_resting: Option<((Point, Point), Point, f64)>,
+    /// The drawing aids bar under the menu is shown.
+    show_aids: bool,
     /// The tools panel on the left is shown.
     show_tools: bool,
     /// The settings panel on the right is shown.
@@ -218,6 +223,8 @@ impl Workspace {
             reference: None,
             reference_auto: false,
             resting: None,
+            edge_resting: None,
+            show_aids: true,
             show_tools: true,
             show_settings: true,
             pointer: None,
@@ -290,6 +297,11 @@ impl Workspace {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| changed |= self.menu(ui, history));
         });
+        if self.show_aids {
+            egui::Panel::top("aids").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| self.aids(ui));
+            });
+        }
         if self.show_tools {
             egui::Panel::left("tools").show(ui, |ui| self.tools(ui));
         }
@@ -305,10 +317,6 @@ impl Workspace {
                     {
                         changed |= self.run(history, command);
                     }
-                    ui.separator();
-                    egui::CollapsingHeader::new(t("snap.title"))
-                        .default_open(true)
-                        .show(ui, |ui| self.aids(ui));
                 });
             });
         }
@@ -438,6 +446,7 @@ impl Workspace {
             self.layouts(ui);
             ui.separator();
             ui.checkbox(&mut self.show_guides, t("snap.placed"));
+            ui.checkbox(&mut self.show_aids, t("view.aids"));
             ui.checkbox(&mut self.show_tools, t("view.tools"));
             ui.checkbox(&mut self.show_settings, t("view.settings"));
         });
@@ -578,9 +587,10 @@ impl Workspace {
         }
     }
 
-    /// The drawing aids: what the pointer snaps to, and the points placed
-    /// from others.
+    /// The drawing aids, in a row: what the pointer snaps to, and the
+    /// points placed from others.
     fn aids(&mut self, ui: &mut Ui) {
+        ui.strong(t("snap.title"));
         let o = &mut self.snap_options;
         for (on, key) in [
             (&mut o.points, "snap.points"),
@@ -593,22 +603,23 @@ impl Workspace {
         ] {
             ui.checkbox(on, t(key));
         }
-        ui.label(t("snap.step"));
-        ui.horizontal_wrapped(|ui| {
-            for (on, angle) in o.base_angles.iter_mut().zip(BASE_ANGLES) {
-                ui.toggle_value(on, format!("{angle}°"));
-            }
-            ui.label(t("snap.other"));
-            ui.add(
-                egui::DragValue::new(&mut o.other_angle)
-                    .range(0..=180)
-                    .suffix("°"),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label(t("snap.divisions"));
-            ui.add(egui::DragValue::new(&mut o.divisions).range(2..=12));
-        });
+        ui.separator();
+        ui.label(t("snap.step")).on_hover_text(t("snap.step_hint"));
+        for (on, angle) in o.base_angles.iter_mut().zip(BASE_ANGLES) {
+            ui.toggle_value(on, format!("{angle}°"));
+        }
+        ui.label(t("snap.other"));
+        ui.add(
+            egui::DragValue::new(&mut o.other_angle)
+                .range(0..=180)
+                .suffix("°"),
+        );
+        ui.separator();
+        ui.label(t("snap.divisions"));
+        ui.add(egui::DragValue::new(&mut o.divisions).range(2..=12));
+        if self.tool != Tool::Select {
+            ui.separator();
+        }
         if self.tool != Tool::Select
             && ui
                 .selectable_label(self.halfway.is_some(), t("snap.halfway"))
@@ -855,12 +866,30 @@ impl Workspace {
                     history.project().guides.iter().map(|g| g.shape).collect();
                 scene.place_guides(&shapes);
             }
-            // The edge under the pointer is picked up for guide lines.
-            if let Some(edge) = scene.edge_near(p, snap)
-                && !self.picked.contains(&edge)
+            // The edge the pointer stops on for a moment is picked up for
+            // guide lines; one passed over, or slid along, is not.
+            let now = ui.input(|i| i.time);
+            match scene
+                .edge_near(p, snap)
+                .filter(|e| !self.picked.contains(e))
             {
-                self.picked.insert(0, edge);
-                self.picked.truncate(PICKED_EDGES);
+                Some(edge) => match self.edge_resting {
+                    Some((e, at, since))
+                        if e == edge && (at.x - p.x).hypot(at.y - p.y) < snap / 4.0 =>
+                    {
+                        if now - since >= REST {
+                            self.picked.insert(0, edge);
+                            self.picked.truncate(PICKED_EDGES);
+                            self.edge_resting = None;
+                        }
+                    }
+                    _ => {
+                        self.edge_resting = Some((edge, p, now));
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs_f64(REST));
+                    }
+                },
+                None => self.edge_resting = None,
             }
             // Edges undone, deleted or moved give no guides any more.
             self.picked.retain(|e| scene.has_edge(*e));
@@ -965,7 +994,8 @@ impl Workspace {
             let gives_point = snapped
                 .as_ref()
                 .is_some_and(|s| self.next_point(from, base, s).is_some());
-            let label = self.typed.label(live);
+            let offset = Some(from.map_or((p.x, p.y), |a| (p.x - a.x, p.y - a.y)));
+            let label = self.typed.label(live, offset);
             let warn = !self.typed.is_empty() && !gives_point;
             self.view
                 .measure(&painter, p, &label, warn, self.halfway.as_deref());

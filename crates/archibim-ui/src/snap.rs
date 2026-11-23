@@ -1,7 +1,7 @@
 //! Drawing aids: where the pointer lands once it snaps to points, edges,
 //! angles, alignments and guide lines, and the dashed lines that show why.
 //!
-//! An edge the pointer passes over is picked up: until two others replace
+//! An edge the pointer rests on for a moment is picked up: until two others replace
 //! it, it offers guide lines (its extension and its perpendiculars at both
 //! ends), directions parallel and perpendicular to it, and the foot of the
 //! perpendicular from the last point placed.

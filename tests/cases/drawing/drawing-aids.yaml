@@ -6,7 +6,7 @@ given: |
   beam or places a column. Every drawing aid is on.
 when: |
   The architect moves the pointer, holds Shift, or turns aids off one by
-  one in the tools palette.
+  one in the drawing aids bar under the menu.
 expect:
   - Near an end or a corner, a middle or a crossing of two lines, the
     pointer lands exactly on it, and a mark shows which it is.
