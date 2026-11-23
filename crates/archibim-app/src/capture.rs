@@ -114,6 +114,17 @@ impl Capture {
                 typed: "2000",
                 ..Shot::new("08-reference", None, Layout::Plan)
             },
+            // The first floor, joined to the walls under it, with its
+            // palette; then the slab tool and its choice of contour.
+            Shot::new(
+                "09-floor-slab",
+                project.slabs.last().map(|s| s.id),
+                Layout::Both,
+            ),
+            Shot {
+                tool: Tool::Slab,
+                ..Shot::new("10-slab-tool", None, Layout::Plan)
+            },
         ];
         Self {
             dir,

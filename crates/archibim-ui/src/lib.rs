@@ -1252,7 +1252,13 @@ impl Workspace {
                     ..self.templates.slab.clone()
                 };
                 if std::mem::take(&mut self.joining) {
-                    joined_slab(history.project(), slab)
+                    match joined_slab(history.project(), slab) {
+                        Ok(command) => command,
+                        Err(e) => {
+                            self.message = Some(format!("{} {e}", t("status.refused")));
+                            return false;
+                        }
+                    }
                 } else {
                     Command::AddSlab(slab)
                 }
@@ -1379,32 +1385,30 @@ fn screen_scale(points_per_mm: f32) -> Option<u32> {
     Some(((n / unit).round() * unit) as u32)
 }
 
-/// The reference after B: a reference to pick, or none if one was asked
-/// for already; one taken by resting (`auto`) gives way to a new pick.
 /// A new slab with the walls, columns and beams it passes through joined
 /// to it, in one undo step.
-fn joined_slab(project: &Project, slab: Slab) -> Command {
+fn joined_slab(project: &Project, slab: Slab) -> Result<Command, archibim_model::ModelError> {
     let id = slab.id;
     let mut after = project.clone();
-    let through = archibim_commands::apply(&mut after, Command::AddSlab(slab.clone()))
-        .ok()
-        .and_then(|_| cuts_through(&after, id).ok())
-        .unwrap_or_default();
+    archibim_commands::apply(&mut after, Command::AddSlab(slab.clone()))?;
+    let through = cuts_through(&after, id)?;
     if through.is_empty() {
-        return Command::AddSlab(slab);
+        return Ok(Command::AddSlab(slab));
     }
     let joins = through.into_iter().map(|element| Command::SetCut {
         element,
         by: id,
         on: true,
     });
-    Command::Group(
+    Ok(Command::Group(
         std::iter::once(Command::AddSlab(slab))
             .chain(joins)
             .collect(),
-    )
+    ))
 }
 
+/// The reference after B: a reference to pick, or none if one was asked
+/// for already; one taken by resting (`auto`) gives way to a new pick.
 fn asked_reference(current: Option<Option<Point>>, auto: bool) -> Option<Option<Point>> {
     match current {
         Some(_) if !auto => None,
