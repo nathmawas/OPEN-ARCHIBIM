@@ -2,7 +2,7 @@
 //! in place. Every change becomes one command when the user lets go.
 
 use archibim_commands::Command;
-use archibim_geometry::{contains, stair_steps};
+use archibim_geometry::{contains, roof_cuts, stair_steps};
 use archibim_model::{
     Align, Anchor, Beam, Column, Guide, GuideShape, Id, Layer, LayerRole, Material, Mesh,
     MeshPoint, Opening, Point, Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall,
@@ -146,6 +146,10 @@ impl Properties {
             self.editing = false;
             return Some(flip(project, w));
         }
+        if let Some(command) = cuts(ui, project, draft.id()) {
+            self.editing = false;
+            return Some(command);
+        }
         if ui.button(t("action.delete")).clicked() {
             self.editing = false;
             return Some(draft.remove());
@@ -155,6 +159,51 @@ impl Properties {
             draft.clone().replace()
         })
     }
+}
+
+/// The cuts of `id`: for a roof, cutting the walls, columns and beams that
+/// rise through it, or releasing them; for a cut element, releasing it.
+/// Each is one undo step.
+fn cuts(ui: &mut Ui, project: &Project, id: Id) -> Option<Command> {
+    let set = |pairs: Vec<(Id, Id)>, on: bool| {
+        let commands: Vec<Command> = pairs
+            .into_iter()
+            .map(|(element, roof)| Command::SetCut { element, roof, on })
+            .collect();
+        (!commands.is_empty()).then_some(Command::Group(commands))
+    };
+    let mut command = None;
+    if project.roof(id).is_ok() {
+        let cut: Vec<(Id, Id)> = project
+            .cuts()
+            .iter()
+            .copied()
+            .filter(|&(_, r)| r == id)
+            .collect();
+        // What rises through the roof is worked out on the click only: it
+        // goes over the whole model.
+        if ui
+            .button(t("action.cut_under"))
+            .on_hover_text(t("action.cut_under_hint"))
+            .clicked()
+            && let Ok(through) = roof_cuts(project, id)
+        {
+            command = set(through.into_iter().map(|e| (e, id)).collect(), true);
+        }
+        let label = format!("{} ({})", t("action.release_cuts"), cut.len());
+        if ui
+            .add_enabled(!cut.is_empty(), egui::Button::new(label))
+            .clicked()
+        {
+            command = set(cut, false);
+        }
+    } else {
+        let cut: Vec<(Id, Id)> = project.cuts_of(id).map(|r| (id, r)).collect();
+        if !cut.is_empty() && ui.button(t("action.uncut")).clicked() {
+            command = set(cut, false);
+        }
+    }
+    command
 }
 
 /// The wall mirrored about its reference line, with its openings: one

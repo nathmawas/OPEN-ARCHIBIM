@@ -7,7 +7,8 @@
 use archibim_commands::{Command, History};
 use archibim_geometry::{
     LayerPlan, Phase, beam_outline, column_outline, mesh_blocks, mesh_contours, mesh_triangles,
-    model_prisms, plan_layers, polygon_area, roof_blocks, roof_faces, roof_overhang, stair_steps,
+    model_blocks, model_prisms, plan_layers, polygon_area, roof_blocks, roof_cuts, roof_faces,
+    roof_overhang, stair_steps,
 };
 use archibim_model::{
     Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, JunctionMode, Layer,
@@ -1624,5 +1625,294 @@ fn guides_are_added_edited_cleared_and_undone() -> Result {
     let mut back = f.h.project().guides.clone();
     back.sort_by_key(|g| g.id.0);
     assert_eq!(back, two.guides);
+    Ok(())
+}
+
+#[test]
+fn roofs_walls_cut_under() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 5)?;
+    let timber = f.material("timber", 4)?;
+    let s45 = Some(45f64.to_radians());
+    let roof = Roof {
+        id: f.h.new_id(),
+        story: f.story1,
+        outline: rect_outline(10_000.0, 6_000.0),
+        edges: [s45, None, s45, None]
+            .iter()
+            .map(|&slope| RoofEdge {
+                slope,
+                overhang: 0.0,
+            })
+            .collect(),
+        layers: vec![layer_of(LayerRole::LoadBearing, timber, 300.0)],
+        eaves: LevelRef {
+            story: f.story1,
+            kind: LevelKind::Finished,
+            offset: 0.0,
+        },
+        plane: RoofPlane::Top,
+    };
+    let roof_id = roof.id;
+    f.h.run(Command::AddRoof(roof))?;
+    // Walls 6300 high, drawn clockwise so that they lie under the roof: a
+    // gable, an eaves wall, and one out of the roof.
+    let mut walls = Vec::new();
+    for (start, end) in [
+        ((0.0, 0.0), (0.0, 6_000.0)),
+        ((10_000.0, 0.0), (0.0, 0.0)),
+        ((12_000.0, 0.0), (14_000.0, 0.0)),
+    ] {
+        let id = f.wall(start, end, &[(concrete, 200.0)])?;
+        let mut w = f.h.project().wall(id)?.clone();
+        w.top.offset = 3_500.0;
+        f.h.run(Command::ReplaceWall(w))?;
+        walls.push(id);
+    }
+    let tops =
+        |p: &Project, id: Id| -> std::result::Result<(f64, f64), Box<dyn std::error::Error>> {
+            let t = model_blocks(p, Phase::Proposed)?
+                .into_iter()
+                .filter(|b| b.element == id)
+                .flat_map(|b| b.top)
+                .fold((f64::MAX, f64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)));
+            Ok(t)
+        };
+    let near = |a: f64, b: f64| (a - b).abs() < 1.0;
+    for &w in &walls {
+        assert_eq!(tops(f.h.project(), w)?, (6_300.0, 6_300.0), "uncut");
+    }
+    // The underside: 2800 at the eaves, less the build-up square to a 45
+    // degree slope, rising 1 for 1 to the ridge at y = 3000.
+    let low = 2_800.0 - 300.0 / 45f64.to_radians().cos();
+    // The roof offers to cut the two walls rising through it.
+    assert_eq!(roof_cuts(f.h.project(), roof_id)?, vec![walls[0], walls[1]]);
+    let cuts: Vec<Command> = walls
+        .iter()
+        .map(|&element| Command::SetCut {
+            element,
+            roof: roof_id,
+            on: true,
+        })
+        .collect();
+    f.h.run(Command::Group(cuts))?;
+    assert!(roof_cuts(f.h.project(), roof_id)?.is_empty(), "all cut");
+    let (lo, hi) = tops(f.h.project(), walls[0])?;
+    assert!(near(lo, low) && near(hi, low + 3_000.0), "gable: {lo} {hi}");
+    let (lo, hi) = tops(f.h.project(), walls[1])?;
+    assert!(near(lo, low) && near(hi, low + 200.0), "eaves: {lo} {hi}");
+    assert_eq!(tops(f.h.project(), walls[2])?, (6_300.0, 6_300.0), "out");
+    // The wall keeps its own height.
+    assert!(close(f.h.project().wall_extent(walls[0])?.1, 6_300.0));
+    // The cut follows the roof: raised by 1000, the gable point too.
+    let mut raised = f.h.project().roof(roof_id)?.clone();
+    raised.eaves.offset = 1_000.0;
+    f.h.run(Command::ReplaceRoof(raised))?;
+    let (_, hi) = tops(f.h.project(), walls[0])?;
+    assert!(near(hi, (low + 4_000.0).min(6_300.0)), "{hi}");
+    f.h.undo()?;
+    // A roof under the wall's bottom leaves nothing of it there.
+    let mut sunk = f.h.project().roof(roof_id)?.clone();
+    sunk.eaves.offset = -5_000.0;
+    f.h.run(Command::ReplaceRoof(sunk))?;
+    let left: Vec<_> = model_blocks(f.h.project(), Phase::Proposed)?
+        .into_iter()
+        .filter(|b| b.element == walls[1])
+        .collect();
+    assert!(left.is_empty(), "the eaves wall is all above the roof");
+    f.h.undo()?;
+    // Deleting the roof releases the walls; undo brings the cuts back.
+    f.h.run(Command::RemoveRoof(roof_id))?;
+    assert!(f.h.project().cuts().is_empty());
+    assert_eq!(tops(f.h.project(), walls[0])?, (6_300.0, 6_300.0));
+    f.h.undo()?;
+    assert_eq!(f.h.project().cuts().len(), 3);
+    // Deleting a cut wall and undoing brings its cut back.
+    f.h.run(Command::RemoveWall(walls[2]))?;
+    assert_eq!(f.h.project().cuts().len(), 2);
+    f.h.undo()?;
+    assert_eq!(f.h.project().cuts().len(), 3);
+    // One undo step stops all three cuts.
+    f.h.undo()?;
+    assert!(f.h.project().cuts().is_empty());
+    // A column is cut too; a slab is not something to cut.
+    let column = f.h.new_id();
+    f.h.run(Command::AddColumn(Column {
+        id: column,
+        story: f.story0,
+        at: Point::new(5_000.0, 3_000.0),
+        anchor: Anchor::default(),
+        angle: 0.0,
+        width: 300.0,
+        depth: 300.0,
+        round: false,
+        material: concrete,
+        bottom: f.h.project().wall(walls[0])?.bottom,
+        top: f.h.project().wall(walls[0])?.top,
+    }))?;
+    f.h.run(Command::SetCut {
+        element: column,
+        roof: roof_id,
+        on: true,
+    })?;
+    let (_, hi) = tops(f.h.project(), column)?;
+    assert!(near(hi, low + 3_000.0), "column under the ridge: {hi}");
+    assert!(
+        f.h.run(Command::SetCut {
+            element: roof_id,
+            roof: roof_id,
+            on: true
+        })
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn roofs_walls_cut_under_edge_cases() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 5)?;
+    let timber = f.material("timber", 4)?;
+    let roof_at = |f: &mut Fixture, offset: f64, slope: Option<f64>| {
+        let id = f.h.new_id();
+        let roof = Roof {
+            id,
+            story: f.story1,
+            outline: rect_outline(10_000.0, 6_000.0),
+            edges: (0..4)
+                .map(|_| RoofEdge {
+                    slope,
+                    overhang: 0.0,
+                })
+                .collect(),
+            layers: vec![layer_of(LayerRole::LoadBearing, timber, 300.0)],
+            eaves: LevelRef {
+                story: f.story1,
+                kind: LevelKind::Finished,
+                offset,
+            },
+            plane: RoofPlane::Top,
+        };
+        f.h.run(Command::AddRoof(roof)).map(|_| id)
+    };
+    // Flat roofs: undersides at 2500 and 1500.
+    let high = roof_at(&mut f, 0.0, None)?;
+    let low = roof_at(&mut f, -1_000.0, None)?;
+    let id = f.wall((1_000.0, 3_000.0), (9_000.0, 3_000.0), &[(concrete, 200.0)])?;
+    let mut w = f.h.project().wall(id)?.clone();
+    w.top.offset = 3_500.0;
+    f.h.run(Command::ReplaceWall(w))?;
+    let opening_id = f.h.new_id();
+    f.h.run(Command::AddOpening(Opening {
+        id: opening_id,
+        wall: id,
+        kind: OpeningKind::Interior,
+        position: 1_000.0,
+        sill: 0.0,
+        height: 2_150.0,
+        frame: 68.0,
+        parts: vec![Part {
+            width: 900.0,
+            operation: Operation::SideHung(Hand::Right),
+        }],
+        nominal: NominalSize::ClearOpening,
+    }))?;
+    let top_of = |p: &Project| -> std::result::Result<f64, Box<dyn std::error::Error>> {
+        let mut hi = f64::MIN;
+        for b in model_blocks(p, Phase::Proposed)?
+            .into_iter()
+            .filter(|b| b.element == id)
+        {
+            for k in 0..b.top.len() {
+                assert!(b.top[k].is_finite() && b.bottom[k].is_finite());
+                assert!(b.top[k] >= b.bottom[k] - 1e-6, "top below bottom");
+                hi = hi.max(b.top[k]);
+            }
+        }
+        Ok(hi)
+    };
+    assert!(close(top_of(f.h.project())?, 6_300.0));
+    // The strips over the head of the door are cut with the rest.
+    f.h.run(Command::SetCut {
+        element: id,
+        roof: high,
+        on: true,
+    })?;
+    assert!(close(top_of(f.h.project())?, 2_500.0));
+    // Two roofs: the lower one wins, in either order.
+    f.h.run(Command::SetCut {
+        element: id,
+        roof: low,
+        on: true,
+    })?;
+    assert!(close(top_of(f.h.project())?, 1_500.0));
+    // Undo and redo of the cut.
+    f.h.undo()?;
+    assert!(close(top_of(f.h.project())?, 2_500.0));
+    f.h.redo()?;
+    assert!(close(top_of(f.h.project())?, 1_500.0));
+    // Removing the lower roof releases it; undo brings the cut back.
+    f.h.run(Command::RemoveRoof(low))?;
+    assert!(close(top_of(f.h.project())?, 2_500.0));
+    f.h.undo()?;
+    assert!(close(top_of(f.h.project())?, 1_500.0));
+    f.h.redo()?;
+    assert!(close(top_of(f.h.project())?, 2_500.0));
+    f.h.undo()?;
+    // Cutting twice under the same roof is one cut.
+    f.h.run(Command::SetCut {
+        element: id,
+        roof: low,
+        on: true,
+    })?;
+    assert_eq!(f.h.project().cuts().len(), 2);
+    // Refused: a slab, an unknown element, an unknown roof.
+    let slab = Slab {
+        id: f.h.new_id(),
+        story: f.story0,
+        outline: rect_outline(2_000.0, 2_000.0),
+        layers: vec![layer_of(LayerRole::LoadBearing, concrete, 200.0)],
+        top: LevelRef {
+            story: f.story0,
+            kind: LevelKind::Structural,
+            offset: 0.0,
+        },
+    };
+    let slab_id = slab.id;
+    f.h.run(Command::AddSlab(slab))?;
+    let before = f.h.project().cuts().to_vec();
+    for (element, roof) in [(slab_id, high), (Id(9_999), high), (id, Id(9_999))] {
+        assert!(
+            f.h.run(Command::SetCut {
+                element,
+                roof,
+                on: true
+            })
+            .is_err()
+        );
+    }
+    assert_eq!(f.h.project().cuts(), &before[..]);
+    // A curved wall under a sloped roof stays sane.
+    let sloped = roof_at(&mut f, 0.0, Some(45f64.to_radians()))?;
+    let arc = f.wall((3_000.0, 0.0), (-3_000.0, 0.0), &[(concrete, 200.0)])?;
+    let mut a = f.h.project().wall(arc)?.clone();
+    a.sweep = std::f64::consts::PI;
+    a.reference = WallReference::Axis;
+    a.top.offset = 3_500.0;
+    f.h.run(Command::ReplaceWall(a))?;
+    f.h.run(Command::SetCut {
+        element: arc,
+        roof: sloped,
+        on: true,
+    })?;
+    for b in model_blocks(f.h.project(), Phase::Proposed)?
+        .into_iter()
+        .filter(|b| b.element == arc)
+    {
+        for k in 0..b.top.len() {
+            assert!(b.top[k].is_finite() && b.top[k] >= b.bottom[k] - 1e-6);
+            assert!(b.top[k] <= 6_300.0 + 1e-6);
+        }
+    }
     Ok(())
 }

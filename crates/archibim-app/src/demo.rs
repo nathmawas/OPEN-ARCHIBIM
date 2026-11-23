@@ -346,6 +346,17 @@ pub fn house() -> Result<(History, Id, Templates)> {
         plane: RoofPlane::Bottom,
         ..templates.roof.clone()
     }))?;
+    // The gable walls rise past the ridge and are cut under the roof.
+    for wall in [ids[1], ids[3]] {
+        let mut w = h.project().wall(wall)?.clone();
+        w.top.offset = 3_500.0;
+        h.run(Command::ReplaceWall(w))?;
+        h.run(Command::SetCut {
+            element: wall,
+            roof: id,
+            on: true,
+        })?;
+    }
     // The annex: one plane, low on its far side.
     let id = h.new_id();
     h.run(Command::AddRoof(Roof {

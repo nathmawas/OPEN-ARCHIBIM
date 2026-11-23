@@ -15,6 +15,7 @@ the old one.
 | [0007](0007-egui-interface.md) | egui for the interface, drawn through wgpu | Proposed |
 | [0008](0008-placed-by-reference.md) | Elements keep the line or point they were placed by | Proposed |
 | [0009](0009-placed-guides.md) | Guides placed by hand are project data, not building elements | Proposed |
+| [0010](0010-cuts-are-relations.md) | A cut is a relation kept in the project, not a new shape | Proposed |
 
 ## Format
 

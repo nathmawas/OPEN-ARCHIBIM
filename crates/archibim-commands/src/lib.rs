@@ -131,6 +131,15 @@ pub enum Command {
     RemoveStair(Id),
     /// Replaces a stair with a new state of itself, same identifier.
     ReplaceStair(Stair),
+    /// Cuts a wall, a column or a beam under a roof, or stops cutting it.
+    SetCut {
+        /// The wall, column or beam.
+        element: Id,
+        /// The roof it is cut under.
+        roof: Id,
+        /// Whether it is cut.
+        on: bool,
+    },
     /// Several commands applied in order, undone in one step. If one is
     /// refused, the ones before it are undone and nothing changes.
     Group(Vec<Command>),
@@ -143,6 +152,29 @@ pub struct Applied {
     pub inverse: Command,
     /// The elements whose shape or data changed.
     pub changed: Vec<Id>,
+}
+
+/// The cuts an element takes part in, as the commands that set them back.
+fn cuts_back(project: &Project, id: Id) -> Vec<Command> {
+    project
+        .cuts()
+        .iter()
+        .filter(|(e, r)| *e == id || *r == id)
+        .map(|&(element, roof)| Command::SetCut {
+            element,
+            roof,
+            on: true,
+        })
+        .collect()
+}
+
+/// `add`, followed by the cuts that come back with it.
+fn with_cuts(add: Command, cuts: Vec<Command>) -> Command {
+    if cuts.is_empty() {
+        add
+    } else {
+        Command::Group(std::iter::once(add).chain(cuts).collect())
+    }
 }
 
 /// Applies a command to the project. On error, the project is unchanged.
@@ -229,8 +261,9 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
                     "clear the junction modes of this wall first",
                 ));
             }
+            let cuts = cuts_back(project, id);
             let wall = project.remove_wall(id)?;
-            applied(AddWall(wall), vec![id])
+            applied(with_cuts(AddWall(wall), cuts), vec![id])
         }
         SetWallLayers { wall, layers } => {
             project.check_layers(&layers)?;
@@ -317,7 +350,11 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             project.insert_column(column)?;
             applied(RemoveColumn(id), vec![id])
         }
-        RemoveColumn(id) => applied(AddColumn(project.remove_column(id)?), vec![id]),
+        RemoveColumn(id) => {
+            let cuts = cuts_back(project, id);
+            let column = project.remove_column(id)?;
+            applied(with_cuts(AddColumn(column), cuts), vec![id])
+        }
         ReplaceColumn(new) => {
             let id = new.id;
             applied(ReplaceColumn(project.replace_column(new)?), vec![id])
@@ -327,7 +364,11 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             project.insert_beam(beam)?;
             applied(RemoveBeam(id), vec![id])
         }
-        RemoveBeam(id) => applied(AddBeam(project.remove_beam(id)?), vec![id]),
+        RemoveBeam(id) => {
+            let cuts = cuts_back(project, id);
+            let beam = project.remove_beam(id)?;
+            applied(with_cuts(AddBeam(beam), cuts), vec![id])
+        }
         ReplaceBeam(new) => {
             let id = new.id;
             applied(ReplaceBeam(project.replace_beam(new)?), vec![id])
@@ -337,10 +378,40 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             project.insert_roof(roof)?;
             applied(RemoveRoof(id), vec![id])
         }
-        RemoveRoof(id) => applied(AddRoof(project.remove_roof(id)?), vec![id]),
+        RemoveRoof(id) => {
+            let cuts = cuts_back(project, id);
+            let mut changed: Vec<Id> = project
+                .cuts()
+                .iter()
+                .filter(|(_, r)| *r == id)
+                .map(|(e, _)| *e)
+                .collect();
+            changed.push(id);
+            let roof = project.remove_roof(id)?;
+            applied(with_cuts(AddRoof(roof), cuts), changed)
+        }
+        SetCut { element, roof, on } => {
+            let before = project.set_cut(element, roof, on)?;
+            applied(
+                SetCut {
+                    element,
+                    roof,
+                    on: before,
+                },
+                vec![element],
+            )
+        }
         ReplaceRoof(new) => {
             let id = new.id;
-            applied(ReplaceRoof(project.replace_roof(new)?), vec![id])
+            // What is cut under it changes with it.
+            let mut changed: Vec<Id> = project
+                .cuts()
+                .iter()
+                .filter(|(_, r)| *r == id)
+                .map(|(e, _)| *e)
+                .collect();
+            changed.push(id);
+            applied(ReplaceRoof(project.replace_roof(new)?), changed)
         }
         AddMesh(mesh) => {
             let id = mesh.id;

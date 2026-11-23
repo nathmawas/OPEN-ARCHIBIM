@@ -178,6 +178,110 @@ pub fn roof_blocks(roof: &Roof, eaves: f64, phase: Phase) -> Vec<Block> {
     blocks
 }
 
+/// The part of a block where `f` is not positive, `f` being given the
+/// point, the bottom and the top of each corner and affine along edges;
+/// the heights of new corners are taken along the edges. Nothing when
+/// less than a square millimetre is left.
+fn clip_block(block: &Block, f: impl Fn(Point, f64, f64) -> f64) -> Option<Block> {
+    let n = block.outline.len();
+    let corner = |k: usize| (block.outline[k], block.bottom[k], block.top[k]);
+    let mut out = Block {
+        outline: Vec::new(),
+        bottom: Vec::new(),
+        top: Vec::new(),
+        ..block.clone()
+    };
+    let mut push = |(p, b, t): (Point, f64, f64)| {
+        out.outline.push(p);
+        out.bottom.push(b);
+        out.top.push(t);
+    };
+    for k in 0..n {
+        let (a, b) = (corner(k), corner((k + 1) % n));
+        let (fa, fb) = (f(a.0, a.1, a.2), f(b.0, b.1, b.2));
+        if fa <= 0.0 {
+            push(a);
+        }
+        if (fa <= 0.0) != (fb <= 0.0) {
+            let s = fa / (fa - fb);
+            push((
+                add(a.0, mul(sub(b.0, a.0), s)),
+                a.1 + (b.1 - a.1) * s,
+                a.2 + (b.2 - a.2) * s,
+            ));
+        }
+    }
+    (out.outline.len() >= 3 && crate::polygon_area(&out.outline) > 1.0).then_some(out)
+}
+
+/// For each edge of a convex polygon, a function positive inside it.
+fn inside(polygon: &[Point]) -> Vec<impl Fn(Point) -> f64 + use<>> {
+    let n = polygon.len();
+    let sign = crate::polygon_signed_area(polygon).signum();
+    (0..n)
+        .map(|k| {
+            let (a, b) = (polygon[k], polygon[(k + 1) % n]);
+            move |p: Point| {
+                let (d, e) = (sub(b, a), sub(p, a));
+                (d.x * e.y - d.y * e.x) * sign
+            }
+        })
+        .collect()
+}
+
+/// A block cut under a roof whose eaves level is at `eaves`: where the
+/// roof's underside is lower than the block's top, the top follows it,
+/// pane by pane; where it is lower than the bottom, nothing is left; out
+/// of the roof, the block is as it was.
+// ponytail: the outline pushed out by the overhang and the panes are
+// taken as convex, like the roof's own panes; concave roofs need the
+// straight skeleton first.
+pub fn cut_under_roof(block: &Block, roof: &Roof, eaves: f64) -> Vec<Block> {
+    let mut out = Vec::new();
+    // Out of the roof: past one edge of its overhang, inside the ones
+    // before, so that no part is kept twice.
+    let edges = inside(&roof_overhang(roof));
+    for k in 0..edges.len() {
+        let mut piece = clip_block(block, |p, _, _| edges[k](p));
+        for before in &edges[..k] {
+            piece = piece.and_then(|b| clip_block(&b, |p, _, _| -before(p)));
+        }
+        out.extend(piece);
+    }
+    let normals = inward_normals(&roof.outline);
+    for face in roof_faces(roof) {
+        let cos = face.slope.cos();
+        let lift = match roof.plane {
+            RoofPlane::Top => 0.0,
+            RoofPlane::Bottom => roof.thickness() / cos,
+        };
+        let underside = |p: Point| {
+            eaves
+                + face
+                    .edge
+                    .map_or(0.0, |i| plane_height(roof, &normals, i, p))
+                + lift
+                - roof.thickness() / cos
+        };
+        let mut piece = Some(block.clone());
+        for edge in inside(&face.polygon) {
+            piece = piece.and_then(|b| clip_block(&b, |p, _, _| -edge(p)));
+        }
+        let Some(piece) = piece else { continue };
+        // Under the roof already: as it is.
+        out.extend(clip_block(&piece, |p, _, top| top - underside(p)));
+        // Through it: the top lowered onto the underside. A top just on
+        // the underside is kept above only, not twice.
+        if let Some(mut b) = clip_block(&piece, |p, _, top| underside(p) - top + 1e-6)
+            .and_then(|b| clip_block(&b, |p, bottom, _| bottom - underside(p)))
+        {
+            b.top = b.outline.iter().map(|&p| underside(p)).collect();
+            out.push(b);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Terrain meshes
 
@@ -818,5 +922,274 @@ mod tests {
             let area = crate::polygon_area(&t.map(|i| points[i].at));
             assert!(area > 1.0, "flat triangle {t:?} in {triangles:?}");
         }
+    }
+
+    // --- cut_under_roof ---
+
+    fn slab_block(outline: Vec<Point>, bottom: f64, top: f64) -> Block {
+        let n = outline.len();
+        Block {
+            element: Id(3),
+            role: None,
+            outline,
+            bottom: vec![bottom; n],
+            top: vec![top; n],
+        }
+    }
+
+    fn wall_block(a: (f64, f64), b: (f64, f64), t: f64, bottom: f64, top: f64) -> Block {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let l = dx.hypot(dy);
+        let (nx, ny) = (-dy / l * t / 2.0, dx / l * t / 2.0);
+        slab_block(
+            vec![
+                Point::new(a.0 - nx, a.1 - ny),
+                Point::new(b.0 - nx, b.1 - ny),
+                Point::new(b.0 + nx, b.1 + ny),
+                Point::new(a.0 + nx, a.1 + ny),
+            ],
+            bottom,
+            top,
+        )
+    }
+
+    /// Plan area times mean height, by a signed fan (exact for affine
+    /// heights, any simple polygon).
+    fn volume(blocks: &[Block]) -> f64 {
+        blocks
+            .iter()
+            .map(|b| {
+                let o = &b.outline;
+                let h = |k: usize| b.top[k] - b.bottom[k];
+                let mut v = 0.0;
+                for k in 1..o.len().saturating_sub(1) {
+                    let a = ((o[k].x - o[0].x) * (o[k + 1].y - o[0].y)
+                        - (o[k].y - o[0].y) * (o[k + 1].x - o[0].x))
+                        / 2.0;
+                    v += a * (h(0) + h(k) + h(k + 1)) / 3.0;
+                }
+                v.abs()
+            })
+            .sum()
+    }
+
+    fn plan_area(blocks: &[Block]) -> f64 {
+        blocks.iter().map(|b| crate::polygon_area(&b.outline)).sum()
+    }
+
+    fn sane(pieces: &[Block]) {
+        for b in pieces {
+            assert!(b.outline.len() >= 3);
+            assert_eq!(b.outline.len(), b.top.len());
+            assert_eq!(b.outline.len(), b.bottom.len());
+            for k in 0..b.outline.len() {
+                assert!(b.outline[k].x.is_finite() && b.outline[k].y.is_finite());
+                assert!(b.top[k].is_finite() && b.bottom[k].is_finite());
+                assert!(b.top[k] >= b.bottom[k] - 1e-6, "top below bottom: {b:?}");
+            }
+        }
+    }
+
+    fn s45() -> Option<f64> {
+        Some(45f64.to_radians())
+    }
+
+    fn roofs() -> Vec<Roof> {
+        let mut all = Vec::new();
+        for plane in [RoofPlane::Top, RoofPlane::Bottom] {
+            for overhang in [0.0, 500.0] {
+                for slopes in [
+                    [s45(), None, s45(), None],
+                    [s45(); 4],
+                    [s45(), None, None, None],
+                    [None; 4],
+                ] {
+                    let mut r = roof(slopes, overhang);
+                    r.plane = plane;
+                    all.push(r);
+                }
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn a_cut_never_adds_volume_or_breaks_a_block() {
+        let arc = |radius: f64, k: usize| {
+            let a = k as f64 * 0.2;
+            Point::new(5_000.0 + radius * a.cos(), 3_000.0 + radius * a.sin())
+        };
+        let curved: Vec<Point> = (0..=12)
+            .map(|k| arc(3_000.0, k))
+            .chain((0..=12).rev().map(|k| arc(3_200.0, k)))
+            .collect();
+        let column = vec![
+            Point::new(4_850.0, 2_850.0),
+            Point::new(5_150.0, 2_850.0),
+            Point::new(5_150.0, 3_150.0),
+            Point::new(4_850.0, 3_150.0),
+        ];
+        let blocks = [
+            wall_block(
+                (-3_000.0, 3_000.0),
+                (13_000.0, 3_000.0),
+                200.0,
+                0.0,
+                9_000.0,
+            ),
+            wall_block((0.0, 0.0), (0.0, 6_000.0), 200.0, 0.0, 6_300.0),
+            wall_block((10_000.0, 0.0), (0.0, 0.0), 200.0, 0.0, 6_300.0),
+            wall_block(
+                (-500.0, -500.0),
+                (10_500.0, 6_500.0),
+                300.0,
+                -200.0,
+                5_000.0,
+            ),
+            slab_block(curved, 0.0, 6_000.0),
+            slab_block(column, 0.0, 6_000.0),
+        ];
+        for r in roofs() {
+            for eaves in [-5_000.0, 0.0, 2_800.0, 3_000.0, 20_000.0] {
+                for b in &blocks {
+                    let pieces = cut_under_roof(b, &r, eaves);
+                    sane(&pieces);
+                    let (cut, whole) = (volume(&pieces), volume(std::slice::from_ref(b)));
+                    assert!(
+                        cut <= whole * (1.0 + 1e-9) + 1.0,
+                        "volume {cut} > {whole}: {r:?} eaves {eaves} block {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_block_out_of_the_roof_or_under_a_high_roof_comes_out_whole() {
+        let r = roof([s45(), None, s45(), None], 0.0);
+        let far = wall_block((12_000.0, 0.0), (14_000.0, 0.0), 200.0, 0.0, 6_300.0);
+        let out = cut_under_roof(&far, &r, 2_800.0);
+        assert!((volume(&out) - volume(std::slice::from_ref(&far))).abs() < 1.0);
+        let wall = wall_block((0.0, 0.0), (0.0, 6_000.0), 200.0, 0.0, 6_300.0);
+        let out = cut_under_roof(&wall, &r, 20_000.0);
+        assert!((volume(&out) - volume(&[wall])).abs() < 1.0);
+        assert!(out.iter().all(|b| b.top.iter().all(|&t| t == 6_300.0)));
+    }
+
+    #[test]
+    fn a_wall_crossing_the_roof_keeps_its_parts_out_whole() {
+        let r = roof([None; 4], 0.0);
+        // Flat Top roof, eaves 3000: underside 2800. The wall sticks out
+        // 3000 at each end.
+        let w = wall_block(
+            (-3_000.0, 3_000.0),
+            (13_000.0, 3_000.0),
+            200.0,
+            0.0,
+            9_000.0,
+        );
+        let pieces = cut_under_roof(&w, &r, 3_000.0);
+        sane(&pieces);
+        let plan = plan_area(&pieces);
+        assert!((plan - 16_000.0 * 200.0).abs() < 1.0, "plan {plan}");
+        let outside = pieces
+            .iter()
+            .filter(|b| b.top.iter().all(|&t| t == 9_000.0))
+            .count();
+        assert_eq!(outside, 2, "{pieces:?}");
+        let cut: Vec<Block> = pieces
+            .iter()
+            .filter(|b| b.top.iter().all(|&t| (t - 2_800.0).abs() < 1e-6))
+            .cloned()
+            .collect();
+        assert_eq!(cut.len(), 1);
+        assert!((plan_area(&cut) - 10_000.0 * 200.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_wall_under_the_overhang_only_is_cut_by_the_overhang() {
+        let r = roof([s45(), None, s45(), None], 1_000.0);
+        // Edge 0 is y = 0, rising inwards; the overhang reaches y = -1000.
+        let w = wall_block((2_000.0, -500.0), (8_000.0, -500.0), 100.0, 0.0, 6_300.0);
+        let pieces = cut_under_roof(&w, &r, 2_800.0);
+        sane(&pieces);
+        let underside = 2_800.0 - 450.0 - 200.0 / 45f64.to_radians().cos();
+        assert!((top_of(&pieces) - underside).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_hipped_roof_cuts_a_column_at_the_hip_by_its_lowest_pane() {
+        let s = Some(30f64.to_radians());
+        let r = roof([s; 4], 0.0);
+        let c = slab_block(
+            vec![
+                Point::new(900.0, 900.0),
+                Point::new(1_100.0, 900.0),
+                Point::new(1_100.0, 1_100.0),
+                Point::new(900.0, 1_100.0),
+            ],
+            0.0,
+            9_000.0,
+        );
+        let pieces = cut_under_roof(&c, &r, 3_000.0);
+        sane(&pieces);
+        let t = 30f64.to_radians().tan();
+        let lift = 200.0 / 30f64.to_radians().cos();
+        let lo = pieces
+            .iter()
+            .flat_map(|b| b.top.iter().copied())
+            .fold(f64::MAX, f64::min);
+        assert!((lo - (3_000.0 + 900.0 * t - lift)).abs() < 1.0, "{lo}");
+        assert!((top_of(&pieces) - (3_000.0 + 1_100.0 * t - lift)).abs() < 1.0);
+        let area = plan_area(&pieces);
+        assert!((area - 200.0 * 200.0).abs() < 1.0, "plan kept once: {area}");
+    }
+
+    #[test]
+    fn the_eaves_level_is_on_the_top_or_on_the_underside() {
+        let mut r = roof([None; 4], 0.0);
+        let w = wall_block((2_000.0, 3_000.0), (8_000.0, 3_000.0), 200.0, 0.0, 6_000.0);
+        let hi = |r: &Roof| top_of(&cut_under_roof(&w, r, 3_000.0));
+        assert!((hi(&r) - 2_800.0).abs() < 1e-6);
+        r.plane = RoofPlane::Bottom;
+        assert!((hi(&r) - 3_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_roof_below_the_bottom_leaves_nothing() {
+        let r = roof([None; 4], 0.0);
+        let w = wall_block(
+            (2_000.0, 3_000.0),
+            (8_000.0, 3_000.0),
+            200.0,
+            3_000.0,
+            6_000.0,
+        );
+        assert!(cut_under_roof(&w, &r, 3_000.0).is_empty());
+    }
+
+    #[test]
+    fn a_top_exactly_on_the_underside_is_not_kept_twice() {
+        let r = roof([None; 4], 0.0);
+        let w = wall_block((2_000.0, 3_000.0), (8_000.0, 3_000.0), 200.0, 0.0, 2_800.0);
+        let pieces = cut_under_roof(&w, &r, 3_000.0);
+        sane(&pieces);
+        assert_eq!(pieces.len(), 1, "{pieces:?}");
+    }
+
+    #[test]
+    fn a_block_cut_under_two_roofs_follows_the_lower_one() {
+        let flat = roof([None; 4], 0.0);
+        let w = wall_block((2_000.0, 3_000.0), (8_000.0, 3_000.0), 200.0, 0.0, 9_000.0);
+        let mut pieces = vec![w];
+        for eaves in [3_000.0, 2_000.0] {
+            pieces = pieces
+                .iter()
+                .flat_map(|b| cut_under_roof(b, &flat, eaves))
+                .collect();
+        }
+        sane(&pieces);
+        assert!((top_of(&pieces) - 1_800.0).abs() < 1e-6);
+        assert!((plan_area(&pieces) - 6_000.0 * 200.0).abs() < 1.0);
     }
 }

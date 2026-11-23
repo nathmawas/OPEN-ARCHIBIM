@@ -78,6 +78,9 @@ pub struct Project {
     /// Guides placed by hand, to draw against.
     pub guides: Vec<Guide>,
     junctions: Vec<(Id, Id, JunctionMode)>,
+    /// Walls, columns and beams cut under a roof: the element, then the
+    /// roof.
+    cuts: Vec<(Id, Id)>,
 }
 
 // ponytail: linear scans over Vecs; switch to maps keyed by Id when projects
@@ -352,13 +355,14 @@ impl Project {
         Ok(std::mem::replace(self.stair_mut(stair.id)?, stair))
     }
 
-    /// Removes a roof.
+    /// Removes a roof, and the cuts it makes.
     pub fn remove_roof(&mut self, id: Id) -> Result<Roof, ModelError> {
         let at = self
             .roofs
             .iter()
             .position(|e| e.id == id)
             .ok_or(ModelError::NotFound(id))?;
+        self.cuts.retain(|(_, r)| *r != id);
         Ok(self.roofs.remove(at))
     }
 
@@ -481,23 +485,25 @@ impl Project {
         Ok(self.guides.remove(at))
     }
 
-    /// Removes a column.
+    /// Removes a column, and its cuts.
     pub fn remove_column(&mut self, id: Id) -> Result<Column, ModelError> {
         let at = self
             .columns
             .iter()
             .position(|e| e.id == id)
             .ok_or(ModelError::NotFound(id))?;
+        self.cuts.retain(|(e, _)| *e != id);
         Ok(self.columns.remove(at))
     }
 
-    /// Removes a beam.
+    /// Removes a beam, and its cuts.
     pub fn remove_beam(&mut self, id: Id) -> Result<Beam, ModelError> {
         let at = self
             .beams
             .iter()
             .position(|e| e.id == id)
             .ok_or(ModelError::NotFound(id))?;
+        self.cuts.retain(|(e, _)| *e != id);
         Ok(self.beams.remove(at))
     }
 
@@ -580,6 +586,7 @@ impl Project {
             .position(|w| w.id == id)
             .ok_or(ModelError::NotFound(id))?;
         self.junctions.retain(|(a, b, _)| *a != id && *b != id);
+        self.cuts.retain(|(e, _)| *e != id);
         Ok(self.walls.remove(at))
     }
 
@@ -649,6 +656,40 @@ impl Project {
             self.junctions.push((a, b, mode));
         }
         Ok(previous)
+    }
+
+    /// Every cut: a wall, a column or a beam, then the roof it is cut
+    /// under.
+    pub fn cuts(&self) -> &[(Id, Id)] {
+        &self.cuts
+    }
+
+    /// The roofs an element is cut under.
+    pub fn cuts_of(&self, element: Id) -> impl Iterator<Item = Id> + '_ {
+        self.cuts
+            .iter()
+            .filter(move |(e, _)| *e == element)
+            .map(|(_, roof)| *roof)
+    }
+
+    /// Cuts a wall, a column or a beam under a roof, or stops cutting it.
+    /// Returns whether it was cut before.
+    pub fn set_cut(&mut self, element: Id, roof: Id, on: bool) -> Result<bool, ModelError> {
+        self.roof(roof)?;
+        if self.wall(element).is_err()
+            && self.column(element).is_err()
+            && self.beam(element).is_err()
+        {
+            return Err(ModelError::Invalid(
+                "only walls, columns and beams are cut under a roof",
+            ));
+        }
+        let before = self.cuts.contains(&(element, roof));
+        self.cuts.retain(|c| *c != (element, roof));
+        if on {
+            self.cuts.push((element, roof));
+        }
+        Ok(before)
     }
 }
 

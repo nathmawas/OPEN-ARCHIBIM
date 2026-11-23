@@ -1,0 +1,36 @@
+id: roofs-walls-cut-under
+title: A wall, a column or a beam is cut under a roof and follows it
+status: proposed
+given: |
+  Story 0 at level 0, story 1 at 2800. A 10 x 6 m roof with two slopes at
+  45 degrees on the long sides and gables on the short ones, eaves level on
+  the top of a 300 build-up at 2800. Walls 200 thick, 6300 high, along the
+  gables and the eaves, and one wall outside the roof.
+when: |
+  The architect asks for the walls, a column or a beam to be cut under the
+  roof, then changes the roof, deletes it, and undoes.
+expect:
+  - Where the roof's underside is lower than the top of the wall, the top
+    of the wall follows the underside, pane by pane; a gable wall ends in a
+    point under the ridge, a wall under the eaves follows the slope across
+    its thickness. All the layers of the wall stop on the underside.
+  - Where the roof's underside is higher than the wall, the wall is as it
+    was; a wall is never stretched up to a roof.
+  - Where the roof's underside is below the bottom of the wall, nothing of
+    the wall is left there.
+  - A wall, or a part of it, out of the roof and its overhang is as it was.
+  - The wall keeps its own height in its properties; the cut is a link
+    between the wall and the roof, not a new height. Changing the slope,
+    the overhang or the levels of the roof moves the cut with it.
+  - A wall can be cut under several roofs; each one cuts what the others
+    left.
+  - Cutting, or stopping the cut, is one undo step. Deleting the roof
+    releases the walls, which are whole again; undo brings back the roof
+    and its cuts. Deleting a cut wall and undoing brings back its cut.
+  - Columns and beams are cut the same way.
+  - The plan does not change.
+  - Not yet - a cut on the top of the roof or each layer on its own roof
+    layer, keeping the part above a roof, stretching a wall up to a roof,
+    cutting under a slab, other operations between elements (subtracting
+    one volume from another), roofs with a re-entrant outline, the cut in
+    IFC export (a clipped body, one bounded half-space per pane).

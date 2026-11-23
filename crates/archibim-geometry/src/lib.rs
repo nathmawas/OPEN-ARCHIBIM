@@ -8,8 +8,8 @@ mod contour;
 mod envelope;
 pub use contour::contour_at;
 pub use envelope::{
-    Block, RISER_TARGET, RoofFace, StairSteps, mesh_blocks, mesh_contours, mesh_triangles,
-    roof_blocks, roof_faces, roof_overhang, stair_steps,
+    Block, RISER_TARGET, RoofFace, StairSteps, cut_under_roof, mesh_blocks, mesh_contours,
+    mesh_triangles, roof_blocks, roof_faces, roof_overhang, stair_steps,
 };
 
 use archibim_model::{
@@ -332,13 +332,52 @@ pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, Model
     Ok(prisms)
 }
 
+/// The walls, columns and beams a roof would cut and not cut away: those
+/// rising through its underside somewhere, not yet cut under it.
+pub fn roof_cuts(project: &Project, roof: Id) -> Result<Vec<Id>, ModelError> {
+    let r = project.roof(roof)?;
+    let eaves = project.level(&r.eaves)?;
+    let mut through: Vec<Id> = Vec::new();
+    for prism in model_prisms(project, Phase::Proposed)? {
+        let id = prism.element;
+        let cuttable =
+            project.wall(id).is_ok() || project.column(id).is_ok() || project.beam(id).is_ok();
+        if !cuttable || project.cuts_of(id).any(|c| c == roof) {
+            continue;
+        }
+        // Lowered somewhere: an element wholly above the roof never is, so
+        // it is left alone rather than cut away.
+        let pieces = cut_under_roof(&Block::from(&prism), r, eaves);
+        if pieces
+            .iter()
+            .flat_map(|b| &b.top)
+            .any(|&t| t < prism.top - 1e-6)
+        {
+            through.push(id);
+        }
+    }
+    through.sort_by_key(|id| id.0);
+    through.dedup();
+    Ok(through)
+}
+
 /// Every volume of the 3D view: the prisms of [`model_prisms`], the
 /// planes of roofs and the triangles of terrain meshes.
 pub fn model_blocks(project: &Project, phase: Phase) -> Result<Vec<Block>, ModelError> {
-    let mut blocks: Vec<Block> = model_prisms(project, phase)?
-        .iter()
-        .map(Block::from)
-        .collect();
+    let mut blocks = Vec::new();
+    for prism in model_prisms(project, phase)? {
+        let mut pieces = vec![Block::from(&prism)];
+        // Cut under each roof it is set to, one after the other.
+        for roof in project.cuts_of(prism.element) {
+            let roof = project.roof(roof)?;
+            let eaves = project.level(&roof.eaves)?;
+            pieces = pieces
+                .iter()
+                .flat_map(|b| cut_under_roof(b, roof, eaves))
+                .collect();
+        }
+        blocks.extend(pieces);
+    }
     for roof in &project.roofs {
         blocks.extend(roof_blocks(roof, project.level(&roof.eaves)?, phase));
     }
