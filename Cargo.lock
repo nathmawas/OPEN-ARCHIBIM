@@ -101,6 +101,7 @@ dependencies = [
  "archibim-render",
  "archibim-ui",
  "eframe",
+ "png",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+id: terrain-mesh-from-survey
+title: A terrain mesh follows the heights of a land survey
+status: proposed
+given: |
+  Story 0 at level 0. A square outline of 10 x 10 m, every point at height 0.
+when: |
+  The architect draws the outline as for a slab, then gives each point its
+  height and adds a point inside at 2 m, in the properties palette.
+expect:
+  - The surface passes through every point; the inner point splits the
+    terrain into triangles around it.
+  - In plan the terrain shows contour lines every 0.5 m, a stronger one
+    every 2.5 m; here at 0.5, 1 and 1.5 m around the hill.
+  - In 3D the terrain is solid down to its flat underside.
+  - A point added outside the outline is kept but has no effect, with a
+    warning; so is a point below the bottom of the ground.
+  - Undo restores the heights.
+  - Not yet - break lines, survey file import, earthworks under buildings,
+    the fill and colour from the terrain's material, renovation status.

@@ -1,14 +1,16 @@
 //! A demonstration house, built through commands: a rectangle of external
 //! walls, two partitions crossing each other, a timber frame annex, a slab,
-//! a column, a beam, a window and a door.
+//! a column, a beam, a window and a door, a gabled roof, a shed roof over
+//! the annex, a turning stair and the terrain around.
 
 use archibim_commands::{Command, History};
 use archibim_model::{
-    Align, Anchor, Beam, Column, Framing, Hand, Id, Layer, LayerRole, LevelKind, LevelRef,
-    Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point, Project,
-    RenovationStatus, Slab, Story, Wall, WallReference,
+    Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, Layer, LayerRole, LevelKind,
+    LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part,
+    Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story,
+    Wall, WallReference,
 };
-use archibim_ui::Templates;
+use archibim_ui::{Preset, Templates};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -26,25 +28,33 @@ pub fn house() -> Result<(History, Id, Templates)> {
             floor_build_up: 0.0,
         }))?;
     }
-    let mut material = |priority| -> Result<Id> {
+    // Names are language pack keys: the starting library shows in the
+    // user's language; names the user types show as typed.
+    // ponytail: translated in the interface language; follow the project's
+    // language and country once projects carry them, and write the
+    // translated name to IFC.
+    let mut material = |name: &str, priority| -> Result<Id> {
         let id = h.new_id();
         h.run(Command::AddMaterial(Material {
             id,
-            name: String::new(),
+            name: name.to_owned(),
             priority,
         }))?;
         Ok(id)
     };
-    let render = material(1)?;
-    let insulation = material(3)?;
-    let concrete = material(9)?;
-    let plaster = material(1)?;
-    let brick = material(5)?;
-    let fibre = material(2)?;
-    let wool = material(2)?;
-    let timber = material(6)?;
-    let osb = material(4)?;
-    let board = material(1)?;
+    let render = material("mat.render", 1)?;
+    let insulation = material("mat.insulation", 3)?;
+    let concrete = material("mat.concrete", 9)?;
+    let plaster = material("mat.plaster", 1)?;
+    let brick = material("mat.brick", 5)?;
+    let fibre = material("mat.wood_fibre", 2)?;
+    let wool = material("mat.mineral_wool", 2)?;
+    let timber = material("mat.timber", 6)?;
+    let osb = material("mat.osb", 4)?;
+    let board = material("mat.plasterboard", 1)?;
+    let block = material("mat.concrete_block", 7)?;
+    let tiles = material("mat.tiles", 1)?;
+    let soil = material("mat.soil", 0)?;
 
     let layer = |role, material, thickness| Layer {
         role,
@@ -98,6 +108,11 @@ pub fn house() -> Result<(History, Id, Templates)> {
         kind: LevelKind::Structural,
         offset,
     };
+    let finished = |story| LevelRef {
+        story,
+        kind: LevelKind::Finished,
+        offset: 0.0,
+    };
     let mut ids = Vec::new();
     for (start, end, layers) in walls {
         let id = h.new_id();
@@ -116,8 +131,58 @@ pub fn house() -> Result<(History, Id, Templates)> {
         }))?;
     }
 
+    let simple = |material, thickness| vec![layer(LayerRole::LoadBearing, material, thickness)];
+    // A low curved garden wall south of the house, bowing away from it.
+    let id = h.new_id();
+    h.run(Command::AddWall(Wall {
+        id,
+        story: ground,
+        start: Point::new(0.0, -11000.0),
+        end: Point::new(10000.0, -11000.0),
+        reference: WallReference::LeftFace,
+        offset: 0.0,
+        sweep: 60f64.to_radians(),
+        layers: simple(concrete, 200.0),
+        bottom: level(ground, 0.0),
+        top: level(ground, 1000.0),
+    }))?;
+    // Guides set out by hand: a line 1500 south of the house, and a
+    // circle 2200 around a tree to keep clear of.
+    for shape in [
+        GuideShape::Line {
+            a: Point::new(0.0, -9500.0),
+            b: Point::new(10000.0, -9500.0),
+        },
+        GuideShape::Circle {
+            centre: Point::new(12500.0, -8000.0),
+            radius: 2200.0,
+        },
+    ] {
+        let id = h.new_id();
+        h.run(Command::AddGuide(Guide {
+            id,
+            story: ground,
+            shape,
+        }))?;
+    }
+    let preset = |name, layers: &Vec<Layer>| Preset {
+        name,
+        layers: layers.clone(),
+    };
+    // ponytail: presets written here for the demo; load them as data, by
+    // country and reviewed by architects (TOOLS.md, rule 17).
+    let wall_presets = vec![
+        preset("preset.wall.concrete", &simple(concrete, 200.0)),
+        preset("preset.wall.block", &simple(block, 200.0)),
+        preset("preset.wall.brick", &simple(brick, 200.0)),
+        preset("preset.wall.partition", &simple(board, 72.0)),
+        preset("preset.wall.external", &external),
+        preset("preset.wall.masonry_partition", &partition),
+        preset("preset.wall.timber_frame", &timber_frame),
+    ];
     let templates = Templates {
         wall: h.project().walls.first().cloned().ok_or("no wall")?,
+        wall_presets,
         slab: Slab {
             id: Id(0),
             story: ground,
@@ -133,6 +198,7 @@ pub fn house() -> Result<(History, Id, Templates)> {
             angle: 0.0,
             width: 300.0,
             depth: 300.0,
+            round: false,
             material: concrete,
             bottom: level(ground, 0.0),
             top: level(first, 0.0),
@@ -179,6 +245,41 @@ pub fn house() -> Result<(History, Id, Templates)> {
             }],
             nominal: NominalSize::ClearOpening,
         },
+        roof: Roof {
+            id: Id(0),
+            story: ground,
+            outline: Vec::new(),
+            edges: vec![RoofEdge {
+                slope: Some(35f64.to_radians()),
+                overhang: 400.0,
+            }],
+            layers: vec![
+                layer(LayerRole::Covering, tiles, 40.0),
+                layer(LayerRole::Insulation, wool, 200.0),
+                layer(LayerRole::LoadBearing, timber, 60.0),
+            ],
+            eaves: level(first, 0.0),
+            plane: RoofPlane::Bottom,
+        },
+        mesh: Mesh {
+            id: Id(0),
+            story: ground,
+            outline: Vec::new(),
+            inner: Vec::new(),
+            level: finished(ground),
+            bottom: -1000.0,
+            material: soil,
+        },
+        stair: Stair {
+            id: Id(0),
+            story: ground,
+            path: Vec::new(),
+            width: 900.0,
+            bottom: finished(ground),
+            top: finished(first),
+            risers: None,
+            material: concrete,
+        },
     };
 
     let slab = Slab {
@@ -219,6 +320,76 @@ pub fn house() -> Result<(History, Id, Templates)> {
         ..templates.door.clone()
     };
     h.run(Command::AddOpening(door))?;
+
+    let points = |xy: &[(f64, f64)]| xy.iter().map(|&(x, y)| Point::new(x, y)).collect();
+    let main: Vec<Point> = points(&[
+        (0.0, 0.0),
+        (10000.0, 0.0),
+        (10000.0, -8000.0),
+        (0.0, -8000.0),
+    ]);
+    // Sloped on the long sides, gables on the short ones.
+    let sloped = templates.roof.edges[0];
+    let gable = RoofEdge {
+        slope: None,
+        overhang: 150.0,
+    };
+    let id = h.new_id();
+    h.run(Command::AddRoof(Roof {
+        id,
+        edges: vec![sloped, gable, sloped, gable],
+        outline: main,
+        ..templates.roof.clone()
+    }))?;
+    // The annex: one plane, low on its far side.
+    let id = h.new_id();
+    h.run(Command::AddRoof(Roof {
+        id,
+        outline: points(&[
+            (10000.0, -2000.0),
+            (14000.0, -2000.0),
+            (14000.0, -6000.0),
+            (10000.0, -6000.0),
+        ]),
+        edges: vec![
+            gable,
+            RoofEdge {
+                slope: Some(10f64.to_radians()),
+                overhang: 400.0,
+            },
+            gable,
+            RoofEdge {
+                slope: None,
+                overhang: 0.0,
+            },
+        ],
+        ..templates.roof.clone()
+    }))?;
+    // A quarter-turn stair in the corner room, up to the first floor.
+    let id = h.new_id();
+    h.run(Command::AddStair(Stair {
+        id,
+        path: points(&[(800.0, -7100.0), (3300.0, -7100.0), (3300.0, -5550.0)]),
+        ..templates.stair.clone()
+    }))?;
+    // The terrain, falling away to the south, below the ground floor.
+    let at = |x, y, z| MeshPoint {
+        at: Point::new(x, y),
+        z,
+    };
+    let id = h.new_id();
+    h.run(Command::AddMesh(Mesh {
+        id,
+        outline: vec![
+            at(-6000.0, 6000.0, -200.0),
+            at(20000.0, 6000.0, -600.0),
+            at(20000.0, -16000.0, -2400.0),
+            at(-6000.0, -16000.0, -1800.0),
+        ],
+        inner: vec![at(5000.0, -4000.0, -250.0), at(12000.0, -4000.0, -400.0)],
+        bottom: -4000.0,
+        ..templates.mesh.clone()
+    }))?;
     Ok((h, ground, templates))
 }
 
@@ -230,6 +401,44 @@ mod tests {
         let plan =
             archibim_geometry::plan_layers(h.project(), story, archibim_geometry::Phase::Proposed)?;
         assert!(plan.iter().any(|l| !l.members.is_empty()), "studs shown");
+        Ok(())
+    }
+
+    #[test]
+    fn the_wall_presets_are_simple_first_then_build_ups_with_known_materials() -> super::Result<()>
+    {
+        let (h, _, templates) = super::house()?;
+        let presets = &templates.wall_presets;
+        assert_eq!(presets.len(), 7);
+        for (i, p) in presets.iter().enumerate() {
+            assert_eq!(p.layers.len() == 1, i < 4, "{}: simple ones first", p.name);
+            assert!(p.name.starts_with("preset.wall."), "{}", p.name);
+            for l in &p.layers {
+                assert!(
+                    h.project().materials.iter().any(|m| m.id == l.material),
+                    "{}: unknown material",
+                    p.name
+                );
+            }
+        }
+        let total = |i: usize| presets[i].layers.iter().map(|l| l.thickness).sum::<f64>();
+        assert_eq!(
+            [total(0), total(1), total(2), total(3)],
+            [200.0, 200.0, 200.0, 72.0]
+        );
+        // Matching by layers must be unambiguous: no two presets are equal.
+        for (i, a) in presets.iter().enumerate() {
+            for b in &presets[i + 1..] {
+                assert_ne!(a.layers, b.layers, "{} and {}", a.name, b.name);
+            }
+        }
+        // The names of the starting library are language pack keys.
+        assert!(
+            h.project()
+                .materials
+                .iter()
+                .all(|m| m.name.starts_with("mat."))
+        );
         Ok(())
     }
 }

@@ -5,7 +5,12 @@
 //! Pure functions: nothing here keeps state or draws.
 
 mod contour;
+mod envelope;
 pub use contour::contour_at;
+pub use envelope::{
+    Block, RISER_TARGET, RoofFace, StairSteps, mesh_blocks, mesh_contours, mesh_triangles,
+    roof_blocks, roof_faces, roof_overhang, stair_steps,
+};
 
 use archibim_model::{
     Beam, Column, Framing, Id, JunctionMode, LayerRole, LevelKind, LevelRef, ModelError, Point,
@@ -167,13 +172,30 @@ fn curved_layers(wall: &Wall, phase: Phase) -> Vec<LayerPlan> {
 }
 
 /// A column in plan, placed by its anchor and turned by its angle.
+/// A round column is cut into short segments, for drawing only.
 pub fn column_outline(column: &Column) -> Vec<Point> {
+    let depth = if column.round {
+        column.width
+    } else {
+        column.depth
+    };
     let x0 = column.anchor.width.first_edge(column.width);
-    let y0 = column.anchor.depth.first_edge(column.depth);
-    let (x1, y1) = (x0 + column.width, y0 + column.depth);
+    let y0 = column.anchor.depth.first_edge(depth);
+    let (x1, y1) = (x0 + column.width, y0 + depth);
+    let local: Vec<(f64, f64)> = if column.round {
+        let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, column.width / 2.0);
+        (0..48)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / 48.0;
+                (cx + r * a.cos(), cy + r * a.sin())
+            })
+            .collect()
+    } else {
+        vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    };
     let (sin, cos) = column.angle.sin_cos();
     let c = column.at;
-    [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    local
         .iter()
         .map(|&(x, y)| Point::new(c.x + x * cos - y * sin, c.y + x * sin + y * cos))
         .collect()
@@ -298,7 +320,32 @@ pub fn model_prisms(project: &Project, phase: Phase) -> Result<Vec<Prism>, Model
             push(beam.id, None, outline, bottom, top);
         }
     }
+    // ponytail: each step is solid down to the foot of the stair; a flight
+    // with its own underside comes with stringers and landings.
+    for stair in &project.stairs {
+        let (bottom, top) = (project.level(&stair.bottom)?, project.level(&stair.top)?);
+        let steps = stair_steps(stair, bottom, top);
+        for (tread, height) in steps.treads.into_iter().zip(steps.heights) {
+            push(stair.id, None, tread, bottom.min(top), height);
+        }
+    }
     Ok(prisms)
+}
+
+/// Every volume of the 3D view: the prisms of [`model_prisms`], the
+/// planes of roofs and the triangles of terrain meshes.
+pub fn model_blocks(project: &Project, phase: Phase) -> Result<Vec<Block>, ModelError> {
+    let mut blocks: Vec<Block> = model_prisms(project, phase)?
+        .iter()
+        .map(Block::from)
+        .collect();
+    for roof in &project.roofs {
+        blocks.extend(roof_blocks(roof, project.level(&roof.eaves)?, phase));
+    }
+    for mesh in &project.meshes {
+        blocks.extend(mesh_blocks(mesh, project.level(&mesh.level)?));
+    }
+    Ok(blocks)
 }
 
 /// Is `p` inside the closed polygon?
@@ -413,6 +460,11 @@ pub fn triangulate(polygon: &[Point]) -> Vec<[usize; 3]> {
 
 /// Area of a closed polygon.
 pub fn polygon_area(polygon: &[Point]) -> f64 {
+    polygon_signed_area(polygon).abs()
+}
+
+/// Area of a closed polygon, positive when it turns anticlockwise.
+fn polygon_signed_area(polygon: &[Point]) -> f64 {
     let n = polygon.len();
     let twice: f64 = (0..n)
         .map(|i| {
@@ -420,7 +472,7 @@ pub fn polygon_area(polygon: &[Point]) -> f64 {
             a.x * b.y - b.x * a.y
         })
         .sum();
-    twice.abs() / 2.0
+    twice / 2.0
 }
 
 // ---------------------------------------------------------------------------

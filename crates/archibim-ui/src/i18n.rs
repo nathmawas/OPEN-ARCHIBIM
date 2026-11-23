@@ -21,6 +21,13 @@ fn parse(text: &'static str) -> Pack {
 // ponytail: two packs built in; load packs from files when a third language
 // comes.
 pub fn t(key: &'static str) -> &'static str {
+    label(key)
+}
+
+/// A name kept in the project: translated when it is a language pack key
+/// (the names of the starting library), shown as it is when the user typed
+/// it.
+pub fn label(name: &str) -> &str {
     static PACKS: OnceLock<(Pack, Pack)> = OnceLock::new();
     let (chosen, en) = PACKS.get_or_init(|| {
         let lang = std::env::var("ARCHIBIM_LANG").unwrap_or_default();
@@ -28,10 +35,10 @@ pub fn t(key: &'static str) -> &'static str {
         (parse(chosen), parse(EN))
     });
     chosen
-        .get(key)
-        .or_else(|| en.get(key))
+        .get(name)
+        .or_else(|| en.get(name))
         .copied()
-        .unwrap_or(key)
+        .unwrap_or(name)
 }
 
 #[cfg(test)]

@@ -1,9 +1,10 @@
 //! The plan view: navigation and drawing of the model.
 
 use archibim_geometry::{
-    LayerPlan, beam_outline, column_outline, opening_outline, triangulate, visible_edges,
+    LayerPlan, beam_outline, column_outline, mesh_contours, opening_outline, roof_faces,
+    stair_steps, triangulate, visible_edges,
 };
-use archibim_model::{Id, LayerRole, Point, Project, Wall};
+use archibim_model::{GuideShape, Id, LayerRole, Point, Project, Stair, Wall};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
 use crate::{Snap, SnapKind, WallTool};
@@ -11,8 +12,24 @@ use crate::{Snap, SnapKind, WallTool};
 const INK: Color32 = Color32::from_gray(40);
 /// Colour of drawing guides.
 const GUIDE: Color32 = Color32::from_rgb(220, 90, 40);
+/// Colour of the guides placed by hand.
+pub(crate) const PLACED: Color32 = Color32::from_rgb(0, 150, 140);
+/// Colour of the reference point that typed values measure from.
+const REFERENCE: Color32 = Color32::from_rgb(140, 60, 170);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
 const SLAB: Color32 = Color32::from_gray(235);
+/// Fill of terrain meshes in plan.
+const TERRAIN: Color32 = Color32::from_rgb(232, 240, 222);
+/// Contour lines: one every interval, a stronger one every fifth.
+// ponytail: fixed for every terrain; a setting of the terrain or the view,
+// and the fill from the terrain's material, once materials carry an
+// appearance.
+const CONTOUR: f64 = 500.0;
+/// Height of the plan cut above the foot of a stair: treads above it are
+/// dashed.
+// ponytail: one cut height for every stair; a setting of the story or the
+// view once views have their own settings.
+const STAIR_CUT: f64 = 1100.0;
 pub(crate) const CONCRETE: Color32 = Color32::from_gray(150);
 /// Fill colour of framing members (studs, joists).
 const MEMBER: Color32 = Color32::from_rgb(160, 110, 60);
@@ -42,6 +59,18 @@ impl PlanView {
     /// Screen pixels per millimetre.
     pub fn scale(&self) -> f32 {
         self.scale
+    }
+
+    /// Fits the drawing in the view the next time it is shown.
+    pub fn refit(&mut self) {
+        self.scale = 0.0;
+    }
+
+    /// Zooms in by `factor` around the middle of the view, or out below 1.
+    pub fn zoom(&mut self, factor: f32) {
+        if self.scale > 0.0 {
+            self.scale = (self.scale * factor).clamp(1e-4, 50.0);
+        }
     }
 
     /// Middle or right drag pans, the wheel zooms around the pointer, Home
@@ -82,7 +111,7 @@ impl PlanView {
             0.9 * (self.rect.width() / bounds.width()).min(self.rect.height() / bounds.height());
     }
 
-    fn screen(&self, p: Point) -> Pos2 {
+    pub(crate) fn screen(&self, p: Point) -> Pos2 {
         let d = Vec2::new(p.x as f32, p.y as f32) - self.centre;
         self.rect.center() + Vec2::new(d.x, -d.y) * self.scale
     }
@@ -128,6 +157,16 @@ impl PlanView {
                 Stroke::new(1.0, INK)
             }
         };
+        for mesh in &project.meshes {
+            let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
+            self.polygon(painter, &outline, TERRAIN, stroke(mesh.id));
+            let level = project.level(&mesh.level).unwrap_or(0.0);
+            for (h, a, b) in mesh_contours(mesh, level, CONTOUR) {
+                let major = (h / CONTOUR).round() as i64 % 5 == 0;
+                let width = if major { 1.2 } else { 0.5 };
+                painter.line_segment([self.screen(a), self.screen(b)], Stroke::new(width, INK));
+            }
+        }
         for slab in &project.slabs {
             self.polygon(painter, &slab.outline, SLAB, stroke(slab.id));
         }
@@ -174,6 +213,119 @@ impl PlanView {
                 painter.extend(Shape::dashed_line(&points, stroke(beam.id), 8.0, 5.0));
             }
         }
+        for stair in &project.stairs {
+            self.stair(painter, project, stair, stroke(stair.id));
+        }
+        // Roofs over everything, as lines: the overhang and the ridges,
+        // hips and valleys where the planes meet; the wall line dashed.
+        for roof in &project.roofs {
+            let s = stroke(roof.id);
+            for face in roof_faces(roof) {
+                let points = face.polygon.iter().map(|p| self.screen(*p)).collect();
+                painter.add(Shape::closed_line(points, s));
+            }
+            let mut line: Vec<Pos2> = roof.outline.iter().map(|p| self.screen(*p)).collect();
+            if let Some(first) = line.first().copied() {
+                line.push(first);
+            }
+            painter.extend(Shape::dashed_line(
+                &line,
+                Stroke::new(0.8, s.color),
+                6.0,
+                4.0,
+            ));
+            // The slope of each plane, in its middle.
+            for face in roof_faces(roof).iter().filter(|f| f.slope > 0.0) {
+                let n = face.polygon.len() as f64;
+                let c = face.polygon.iter().fold(Point::new(0.0, 0.0), |c, p| {
+                    Point::new(c.x + p.x / n, c.y + p.y / n)
+                });
+                self.label(
+                    painter,
+                    c,
+                    format!("{:.0}°", face.slope.to_degrees()),
+                    s.color,
+                );
+            }
+            if selection == Some(roof.id) {
+                self.numbers(painter, &roof.outline, true);
+            }
+        }
+        for mesh in project.meshes.iter().filter(|m| selection == Some(m.id)) {
+            let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
+            self.numbers(painter, &outline, false);
+        }
+    }
+
+    fn label(&self, painter: &Painter, at: Point, text: String, color: Color32) {
+        painter.text(
+            self.screen(at),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(12.0),
+            color,
+        );
+    }
+
+    /// Numbers from 1 on the edges (their middles) or the corners of an
+    /// outline, as the properties palette lists them.
+    fn numbers(&self, painter: &Painter, outline: &[Point], edges: bool) {
+        let n = outline.len();
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let at = if edges {
+                Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
+            } else {
+                a
+            };
+            let p = self.screen(at);
+            painter.circle_filled(p, 8.0, SELECTED);
+            painter.text(
+                p,
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                egui::FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
+    /// A stair: its treads, dashed above the plan cut, and the walking line
+    /// with an arrow pointing up the stair.
+    fn stair(&self, painter: &Painter, project: &Project, stair: &Stair, stroke: Stroke) {
+        let (Ok(bottom), Ok(top)) = (project.level(&stair.bottom), project.level(&stair.top))
+        else {
+            return;
+        };
+        let steps = stair_steps(stair, bottom, top);
+        for (tread, h) in steps.treads.iter().zip(&steps.heights) {
+            if *h <= bottom + STAIR_CUT {
+                self.polygon(painter, tread, Color32::WHITE, stroke);
+            } else {
+                let mut points: Vec<Pos2> = tread.iter().map(|p| self.screen(*p)).collect();
+                if let Some(first) = points.first().copied() {
+                    points.push(first);
+                }
+                painter.extend(Shape::dashed_line(
+                    &points,
+                    Stroke::new(0.8, stroke.color),
+                    5.0,
+                    4.0,
+                ));
+            }
+        }
+        let line: Vec<Pos2> = stair.path.iter().map(|p| self.screen(*p)).collect();
+        painter.add(Shape::line(line.clone(), Stroke::new(1.0, stroke.color)));
+        if let [.., a, b] = line[..] {
+            let d = (b - a).normalized() * 10.0;
+            let side = Vec2::new(-d.y, d.x) * 0.5;
+            painter.add(Shape::convex_polygon(
+                vec![b, b - d + side, b - d - side],
+                stroke.color,
+                Stroke::NONE,
+            ));
+        }
+        painter.circle_stroke(line[0], 4.0, Stroke::new(1.0, stroke.color));
     }
 
     /// The symbol of an opening: a frame with its glass for a window, a leaf
@@ -246,7 +398,19 @@ impl PlanView {
         let r = 5.0;
         let mark = Stroke::new(1.5, GUIDE);
         match snap.kind {
-            SnapKind::Free | SnapKind::Direction => {}
+            SnapKind::Free | SnapKind::Direction | SnapKind::Parallel => {}
+            SnapKind::Perpendicular => {
+                // A right-angle mark.
+                let corner = c + Vec2::new(-r, r);
+                painter.add(Shape::line(
+                    vec![c + Vec2::new(-r, -r), corner, c + Vec2::new(r, r)],
+                    mark,
+                ));
+                painter.add(Shape::line(
+                    vec![corner + Vec2::new(0.0, -r), c, corner + Vec2::new(r, 0.0)],
+                    mark,
+                ));
+            }
             SnapKind::Point => {
                 painter.rect_stroke(
                     Rect::from_center_size(c, Vec2::splat(2.0 * r)),
@@ -267,7 +431,20 @@ impl PlanView {
                 painter.line_segment([c + Vec2::splat(-r), c + Vec2::splat(r)], mark);
                 painter.line_segment([c + Vec2::new(-r, r), c + Vec2::new(r, -r)], mark);
             }
-            SnapKind::Edge | SnapKind::Alignment => {
+            SnapKind::Tangent => {
+                // A circle touched by a line along the tangent.
+                let r = 1.5 * r;
+                let d = snap
+                    .guides
+                    .first()
+                    .map(|&(a, b)| (self.screen(b) - self.screen(a)).normalized())
+                    .filter(|d| d.is_finite())
+                    .unwrap_or(Vec2::X);
+                let touch = c + d.rot90() * r;
+                painter.circle_stroke(c, r, mark);
+                painter.line_segment([touch - d * 2.0 * r, touch + d * 2.0 * r], mark);
+            }
+            SnapKind::Edge | SnapKind::Alignment | SnapKind::Guide => {
                 painter.line_segment([c + Vec2::new(-r, 0.0), c + Vec2::new(r, 0.0)], mark);
                 painter.line_segment([c + Vec2::new(0.0, -r), c + Vec2::new(0.0, r)], mark);
             }
@@ -300,7 +477,7 @@ impl PlanView {
             return;
         }
         if let Some(start) = wall.start() {
-            let end = wall.typed_end(start, p).unwrap_or(p);
+            let end = p;
             painter.line_segment([self.screen(start), self.screen(end)], line);
             // The faces, placed from the clicked reference line.
             let ghost = Wall {
@@ -316,18 +493,6 @@ impl PlanView {
                 let outline = [a, b, r(b), r(a)].iter().map(|q| self.screen(*q)).collect();
                 painter.add(Shape::closed_line(outline, Stroke::new(1.0, SELECTED)));
             }
-            let length = ((end.x - start.x).powi(2) + (end.y - start.y).powi(2)).sqrt();
-            let label = match wall.typed() {
-                "" => format!("{length:.0}"),
-                typed => typed.to_owned(),
-            };
-            painter.text(
-                self.screen(end) + Vec2::new(12.0, -12.0),
-                egui::Align2::LEFT_BOTTOM,
-                label,
-                egui::FontId::proportional(14.0),
-                SELECTED,
-            );
         }
         if !slab.is_empty() {
             let mut points: Vec<Pos2> = slab.iter().map(|q| self.screen(*q)).collect();
@@ -337,6 +502,103 @@ impl PlanView {
         if let Some(start) = beam {
             painter.line_segment([self.screen(start), self.screen(p)], line);
         }
+    }
+}
+
+impl PlanView {
+    /// A guide placed by hand, dashed: a line across the whole view, or a
+    /// circle.
+    pub(crate) fn guide(&self, painter: &Painter, shape: &GuideShape, stroke: Stroke) {
+        let points: Vec<Pos2> = match *shape {
+            GuideShape::Line { a, b } => {
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let l = dx.hypot(dy);
+                if l <= 0.0 || self.scale <= 0.0 {
+                    return;
+                }
+                let (ux, uy) = (dx / l, dy / l);
+                // From the point of the line nearest the middle of the view,
+                // half the view's diagonal each way.
+                let c = self.model(self.rect.center());
+                let t = (c.x - a.x) * ux + (c.y - a.y) * uy;
+                let half = f64::from(self.rect.size().length() / 2.0 / self.scale);
+                let at = |s: f64| self.screen(Point::new(a.x + ux * s, a.y + uy * s));
+                vec![at(t - half), at(t + half)]
+            }
+            GuideShape::Circle { centre, radius } => (0..=96)
+                .map(|i| {
+                    let a = f64::from(i) * std::f64::consts::TAU / 96.0;
+                    self.screen(Point::new(
+                        centre.x + radius * a.cos(),
+                        centre.y + radius * a.sin(),
+                    ))
+                })
+                .collect(),
+        };
+        painter.extend(Shape::dashed_line(&points, stroke, 10.0, 5.0));
+    }
+
+    /// The reference point that typed values measure from: a cross, and a
+    /// dashed line to the point `p` about to be placed.
+    pub(crate) fn reference(&self, painter: &Painter, r: Point, p: Option<Point>) {
+        let c = self.screen(r);
+        let mark = Stroke::new(1.5, REFERENCE);
+        let k = 6.0;
+        painter.line_segment([c + Vec2::splat(-k), c + Vec2::splat(k)], mark);
+        painter.line_segment([c + Vec2::new(-k, k), c + Vec2::new(k, -k)], mark);
+        painter.circle_stroke(c, k, mark);
+        if let Some(p) = p {
+            painter.extend(Shape::dashed_line(
+                &[c, self.screen(p)],
+                Stroke::new(1.0, REFERENCE),
+                6.0,
+                4.0,
+            ));
+        }
+    }
+
+    /// Next to the point `p` about to be placed, `label`: what was typed
+    /// or the length and angle from the last point, in the warning colour
+    /// when `warn` (typed values that give no point). While picking two
+    /// points to go halfway, the first one and the middle instead.
+    pub(crate) fn measure(
+        &self,
+        painter: &Painter,
+        p: Point,
+        label: &str,
+        warn: bool,
+        halfway: Option<&[Point]>,
+    ) {
+        if let Some(&a) = halfway.and_then(|h| h.first()) {
+            let line = Stroke::new(1.5, GUIDE);
+            painter.extend(Shape::dashed_line(
+                &[self.screen(a), self.screen(p)],
+                Stroke::new(1.0, GUIDE),
+                6.0,
+                4.0,
+            ));
+            painter.circle_stroke(self.screen(a), 6.0, line);
+            let middle = self.screen(Point::new((a.x + p.x) / 2.0, (a.y + p.y) / 2.0));
+            painter.circle_filled(middle, 5.0, GUIDE);
+            painter.text(
+                middle + Vec2::new(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                "1/2",
+                egui::FontId::proportional(14.0),
+                GUIDE,
+            );
+            return;
+        }
+        if label.is_empty() {
+            return;
+        }
+        painter.text(
+            self.screen(p) + Vec2::new(12.0, -12.0),
+            egui::Align2::LEFT_BOTTOM,
+            label,
+            egui::FontId::proportional(14.0),
+            if warn { GUIDE } else { SELECTED },
+        );
     }
 }
 

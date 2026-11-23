@@ -3,8 +3,8 @@
 //! and the elements it changed.
 
 use archibim_model::{
-    Beam, Column, Id, JunctionMode, Layer, Material, ModelError, Opening, OpeningKind, Operation,
-    Part, Project, Slab, Story, Wall,
+    Beam, Column, Guide, Id, JunctionMode, Layer, Material, Mesh, ModelError, Opening, OpeningKind,
+    Operation, Part, Project, Roof, Slab, Stair, Story, Wall,
 };
 
 /// A change to the model.
@@ -95,6 +95,12 @@ pub enum Command {
     RemoveSlab(Id),
     /// Replaces a slab with a new state of itself, same identifier.
     ReplaceSlab(Slab),
+    /// Adds a guide to draw against.
+    AddGuide(Guide),
+    /// Removes a guide.
+    RemoveGuide(Id),
+    /// Replaces a guide with a new state of itself, same identifier.
+    ReplaceGuide(Guide),
     /// Adds a column.
     AddColumn(Column),
     /// Removes a column.
@@ -107,6 +113,24 @@ pub enum Command {
     RemoveBeam(Id),
     /// Replaces a beam with a new state of itself, same identifier.
     ReplaceBeam(Beam),
+    /// Adds a roof.
+    AddRoof(Roof),
+    /// Removes a roof.
+    RemoveRoof(Id),
+    /// Replaces a roof with a new state of itself, same identifier.
+    ReplaceRoof(Roof),
+    /// Adds a terrain mesh.
+    AddMesh(Mesh),
+    /// Removes a terrain mesh.
+    RemoveMesh(Id),
+    /// Replaces a terrain mesh with a new state of itself, same identifier.
+    ReplaceMesh(Mesh),
+    /// Adds a stair.
+    AddStair(Stair),
+    /// Removes a stair.
+    RemoveStair(Id),
+    /// Replaces a stair with a new state of itself, same identifier.
+    ReplaceStair(Stair),
     /// Several commands applied in order, undone in one step. If one is
     /// refused, the ones before it are undone and nothing changes.
     Group(Vec<Command>),
@@ -278,6 +302,16 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
             let id = new.id;
             applied(ReplaceSlab(project.replace_slab(new)?), vec![id])
         }
+        AddGuide(guide) => {
+            let id = guide.id;
+            project.insert_guide(guide)?;
+            applied(RemoveGuide(id), vec![id])
+        }
+        RemoveGuide(id) => applied(AddGuide(project.remove_guide(id)?), vec![id]),
+        ReplaceGuide(new) => {
+            let id = new.id;
+            applied(ReplaceGuide(project.replace_guide(new)?), vec![id])
+        }
         AddColumn(column) => {
             let id = column.id;
             project.insert_column(column)?;
@@ -297,6 +331,36 @@ pub fn apply(project: &mut Project, command: Command) -> Result<Applied, ModelEr
         ReplaceBeam(new) => {
             let id = new.id;
             applied(ReplaceBeam(project.replace_beam(new)?), vec![id])
+        }
+        AddRoof(roof) => {
+            let id = roof.id;
+            project.insert_roof(roof)?;
+            applied(RemoveRoof(id), vec![id])
+        }
+        RemoveRoof(id) => applied(AddRoof(project.remove_roof(id)?), vec![id]),
+        ReplaceRoof(new) => {
+            let id = new.id;
+            applied(ReplaceRoof(project.replace_roof(new)?), vec![id])
+        }
+        AddMesh(mesh) => {
+            let id = mesh.id;
+            project.insert_mesh(mesh)?;
+            applied(RemoveMesh(id), vec![id])
+        }
+        RemoveMesh(id) => applied(AddMesh(project.remove_mesh(id)?), vec![id]),
+        ReplaceMesh(new) => {
+            let id = new.id;
+            applied(ReplaceMesh(project.replace_mesh(new)?), vec![id])
+        }
+        AddStair(stair) => {
+            let id = stair.id;
+            project.insert_stair(stair)?;
+            applied(RemoveStair(id), vec![id])
+        }
+        RemoveStair(id) => applied(AddStair(project.remove_stair(id)?), vec![id]),
+        ReplaceStair(new) => {
+            let id = new.id;
+            applied(ReplaceStair(project.replace_stair(new)?), vec![id])
         }
         Group(commands) => {
             let mut inverses = Vec::new();
@@ -359,6 +423,16 @@ impl History {
     /// The project in its current state.
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    /// Whether there is a command to undo.
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    /// Whether there is an undone command to redo.
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
     }
 
     /// A new identifier for an element to be added.

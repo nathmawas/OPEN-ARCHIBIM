@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use archibim_geometry::{Prism, triangulate};
+use archibim_geometry::{Block, triangulate};
 use archibim_model::Point;
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor, wgpu};
 
@@ -31,11 +31,11 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// The triangles of `prisms`, each prism in its colour.
-    pub fn new(generation: u64, prisms: &[(&Prism, [f32; 3])]) -> Self {
+    /// The triangles of `blocks`, each block in its colour.
+    pub fn new(generation: u64, blocks: &[(&Block, [f32; 3])]) -> Self {
         let mut vertices = Vec::new();
-        for (prism, color) in prisms {
-            add_prism(&mut vertices, prism, *color);
+        for (block, color) in blocks {
+            add_block(&mut vertices, block, *color);
         }
         Self {
             generation,
@@ -61,37 +61,59 @@ impl Scene {
     }
 }
 
-fn add_prism(out: &mut Vec<Vertex>, prism: &Prism, color: [f32; 3]) {
-    let mut outline: Vec<Point> = prism.outline.clone();
+fn add_block(out: &mut Vec<Vertex>, block: &Block, color: [f32; 3]) {
+    let mut corners: Vec<(Point, f32, f32)> = block
+        .outline
+        .iter()
+        .zip(&block.bottom)
+        .zip(&block.top)
+        .map(|((p, b), t)| (*p, *b as f32, *t as f32))
+        .collect();
+    let outline: Vec<Point> = corners.iter().map(|c| c.0).collect();
     if signed_area(&outline) < 0.0 {
-        outline.reverse();
+        corners.reverse();
     }
-    let (z0, z1) = (prism.bottom as f32, prism.top as f32);
-    let at = |p: Point, z: f32| [p.x as f32, p.y as f32, z];
+    let outline: Vec<Point> = corners.iter().map(|c| c.0).collect();
+    let at = |i: usize, top: bool| {
+        let (p, z0, z1) = corners[i];
+        [p.x as f32, p.y as f32, if top { z1 } else { z0 }]
+    };
     let mut push = |p: [f32; 3], n: [f32; 3]| {
         out.push([
             p[0], p[1], p[2], n[0], n[1], n[2], color[0], color[1], color[2],
         ]);
     };
     for [a, b, c] in triangulate(&outline) {
+        let face = |top: bool| {
+            normalize(cross(
+                sub(at(b, top), at(a, top)),
+                sub(at(c, top), at(a, top)),
+            ))
+        };
+        let up = face(true);
         for i in [a, b, c] {
-            push(at(outline[i], z1), [0.0, 0.0, 1.0]);
+            push(at(i, true), up);
         }
+        let down = scale(face(false), -1.0);
         for i in [a, c, b] {
-            push(at(outline[i], z0), [0.0, 0.0, -1.0]);
+            push(at(i, false), down);
         }
     }
     let n = outline.len();
     for i in 0..n {
-        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        let j = (i + 1) % n;
+        let (a, b) = (outline[i], outline[j]);
+        if corners[i].1 >= corners[i].2 && corners[j].1 >= corners[j].2 {
+            continue;
+        }
         let normal = normalize([(b.y - a.y) as f32, (a.x - b.x) as f32, 0.0]);
         for p in [
-            at(a, z0),
-            at(b, z0),
-            at(b, z1),
-            at(a, z0),
-            at(b, z1),
-            at(a, z1),
+            at(i, false),
+            at(j, false),
+            at(j, true),
+            at(i, false),
+            at(j, true),
+            at(i, true),
         ] {
             push(p, normal);
         }
@@ -406,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_box_has_twelve_triangles_and_the_camera_sees_its_centre() {
-        let prism = Prism {
+        let prism = archibim_geometry::Prism {
             element: Id(1),
             role: None,
             // Clockwise on purpose: it is turned around.
@@ -419,7 +441,7 @@ mod tests {
             bottom: 0.0,
             top: 3000.0,
         };
-        let scene = Scene::new(1, &[(&prism, [1.0, 1.0, 1.0])]);
+        let scene = Scene::new(1, &[(&Block::from(&prism), [1.0, 1.0, 1.0])]);
         assert_eq!(scene.vertices.len(), 12 * 3);
         // Every side normal points away from the box.
         for v in &scene.vertices {

@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::{Beam, Column, Layer, LevelKind, LevelRef, Opening, Slab, Story, Wall};
+use crate::{
+    Beam, Column, Guide, GuideShape, Layer, LevelKind, LevelRef, Mesh, Opening, Point, Roof, Slab,
+    Stair, Story, Wall,
+};
 
 /// Permanent identifier of anything in the project.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -66,6 +69,14 @@ pub struct Project {
     pub columns: Vec<Column>,
     /// Beams.
     pub beams: Vec<Beam>,
+    /// Roofs.
+    pub roofs: Vec<Roof>,
+    /// Terrain meshes.
+    pub meshes: Vec<Mesh>,
+    /// Stairs.
+    pub stairs: Vec<Stair>,
+    /// Guides placed by hand, to draw against.
+    pub guides: Vec<Guide>,
     junctions: Vec<(Id, Id, JunctionMode)>,
 }
 
@@ -110,6 +121,10 @@ impl Project {
     find!(slab, slab_mut, slabs, Slab);
     find!(column, column_mut, columns, Column);
     find!(beam, beam_mut, beams, Beam);
+    find!(roof, roof_mut, roofs, Roof);
+    find!(mesh, mesh_mut, meshes, Mesh);
+    find!(stair, stair_mut, stairs, Stair);
+    find!(guide, guide_mut, guides, Guide);
 
     fn check_free(&mut self, id: Id) -> Result<(), ModelError> {
         let used = self.stories.iter().any(|e| e.id == id)
@@ -118,7 +133,11 @@ impl Project {
             || self.openings.iter().any(|e| e.id == id)
             || self.slabs.iter().any(|e| e.id == id)
             || self.columns.iter().any(|e| e.id == id)
-            || self.beams.iter().any(|e| e.id == id);
+            || self.beams.iter().any(|e| e.id == id)
+            || self.roofs.iter().any(|e| e.id == id)
+            || self.meshes.iter().any(|e| e.id == id)
+            || self.stairs.iter().any(|e| e.id == id)
+            || self.guides.iter().any(|e| e.id == id);
         if used {
             return Err(ModelError::Invalid("identifier already used"));
         }
@@ -260,14 +279,7 @@ impl Project {
     fn check_slab(&self, slab: &Slab) -> Result<(), ModelError> {
         self.story(slab.story)?;
         self.check_layers(&slab.layers)?;
-        let n = slab.outline.len();
-        let twice: f64 = (0..n)
-            .map(|i| {
-                let (a, b) = (slab.outline[i], slab.outline[(i + 1) % n]);
-                a.x * b.y - b.x * a.y
-            })
-            .sum();
-        if n < 3 || twice.abs() < 1.0 {
+        if !encloses(&slab.outline) {
             return Err(ModelError::Invalid("a slab outline must enclose an area"));
         }
         Ok(())
@@ -295,6 +307,126 @@ impl Project {
         Ok(())
     }
 
+    /// Adds a roof. Its story and materials must exist, its outline must
+    /// enclose an area, with one edge setting per outline edge.
+    pub fn insert_roof(&mut self, roof: Roof) -> Result<(), ModelError> {
+        self.check_free(roof.id)?;
+        self.check_roof(&roof)?;
+        self.roofs.push(roof);
+        Ok(())
+    }
+
+    /// Adds a terrain mesh. Its story and material must exist, its outline
+    /// must enclose an area.
+    pub fn insert_mesh(&mut self, mesh: Mesh) -> Result<(), ModelError> {
+        self.check_free(mesh.id)?;
+        self.check_mesh(&mesh)?;
+        self.meshes.push(mesh);
+        Ok(())
+    }
+
+    /// Adds a stair. Its story and material must exist, its walking line
+    /// needs a length.
+    pub fn insert_stair(&mut self, stair: Stair) -> Result<(), ModelError> {
+        self.check_free(stair.id)?;
+        self.check_stair(&stair)?;
+        self.stairs.push(stair);
+        Ok(())
+    }
+
+    /// Replaces a roof with a new state of itself. Returns the previous one.
+    pub fn replace_roof(&mut self, roof: Roof) -> Result<Roof, ModelError> {
+        self.check_roof(&roof)?;
+        Ok(std::mem::replace(self.roof_mut(roof.id)?, roof))
+    }
+
+    /// Replaces a mesh with a new state of itself. Returns the previous one.
+    pub fn replace_mesh(&mut self, mesh: Mesh) -> Result<Mesh, ModelError> {
+        self.check_mesh(&mesh)?;
+        Ok(std::mem::replace(self.mesh_mut(mesh.id)?, mesh))
+    }
+
+    /// Replaces a stair with a new state of itself. Returns the previous one.
+    pub fn replace_stair(&mut self, stair: Stair) -> Result<Stair, ModelError> {
+        self.check_stair(&stair)?;
+        Ok(std::mem::replace(self.stair_mut(stair.id)?, stair))
+    }
+
+    /// Removes a roof.
+    pub fn remove_roof(&mut self, id: Id) -> Result<Roof, ModelError> {
+        let at = self
+            .roofs
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ModelError::NotFound(id))?;
+        Ok(self.roofs.remove(at))
+    }
+
+    /// Removes a mesh.
+    pub fn remove_mesh(&mut self, id: Id) -> Result<Mesh, ModelError> {
+        let at = self
+            .meshes
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ModelError::NotFound(id))?;
+        Ok(self.meshes.remove(at))
+    }
+
+    /// Removes a stair.
+    pub fn remove_stair(&mut self, id: Id) -> Result<Stair, ModelError> {
+        let at = self
+            .stairs
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ModelError::NotFound(id))?;
+        Ok(self.stairs.remove(at))
+    }
+
+    fn check_roof(&self, roof: &Roof) -> Result<(), ModelError> {
+        self.story(roof.story)?;
+        self.check_layers(&roof.layers)?;
+        if !encloses(&roof.outline) || roof.edges.len() != roof.outline.len() {
+            return Err(ModelError::Invalid(
+                "a roof outline must enclose an area, with one setting per edge",
+            ));
+        }
+        // A negative overhang is a design choice (a roof stopping behind a
+        // parapet); a vertical or reversed slope has no plane yet.
+        let steep = |s: f64| !(0.0..std::f64::consts::FRAC_PI_2 - 1e-3).contains(&s);
+        if roof.edges.iter().any(|e| e.slope.is_some_and(steep)) {
+            return Err(ModelError::Invalid(
+                "a roof slope lies between flat and vertical",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_mesh(&self, mesh: &Mesh) -> Result<(), ModelError> {
+        self.story(mesh.story)?;
+        self.material(mesh.material)?;
+        let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
+        if !encloses(&outline) {
+            return Err(ModelError::Invalid("a mesh outline must enclose an area"));
+        }
+        Ok(())
+    }
+
+    fn check_stair(&self, stair: &Stair) -> Result<(), ModelError> {
+        self.story(stair.story)?;
+        self.material(stair.material)?;
+        let length: f64 = stair
+            .path
+            .windows(2)
+            .map(|w| ((w[1].x - w[0].x).powi(2) + (w[1].y - w[0].y).powi(2)).sqrt())
+            .sum();
+        if length < 1.0 || stair.width <= 0.0 || stair.risers == Some(0) {
+            return Err(ModelError::Invalid(
+                "a stair needs a walking line, a width and at least one riser",
+            ));
+        }
+        Ok(())
+    }
+
     /// Removes a slab.
     pub fn remove_slab(&mut self, id: Id) -> Result<Slab, ModelError> {
         let at = self
@@ -303,6 +435,50 @@ impl Project {
             .position(|e| e.id == id)
             .ok_or(ModelError::NotFound(id))?;
         Ok(self.slabs.remove(at))
+    }
+
+    /// Adds a guide. Its story must exist, the two points of a line must
+    /// differ and a circle needs a radius.
+    pub fn insert_guide(&mut self, guide: Guide) -> Result<(), ModelError> {
+        self.check_free(guide.id)?;
+        self.check_guide(&guide)?;
+        self.guides.push(guide);
+        Ok(())
+    }
+
+    /// Replaces a guide with a new state of itself. Returns the previous one.
+    pub fn replace_guide(&mut self, guide: Guide) -> Result<Guide, ModelError> {
+        self.check_guide(&guide)?;
+        Ok(std::mem::replace(self.guide_mut(guide.id)?, guide))
+    }
+
+    fn check_guide(&self, guide: &Guide) -> Result<(), ModelError> {
+        self.story(guide.story)?;
+        let valid = match guide.shape {
+            GuideShape::Line { a, b } => {
+                let d = (b.x - a.x).hypot(b.y - a.y);
+                d.is_finite() && d > 1e-9
+            }
+            GuideShape::Circle { centre, radius } => {
+                centre.x.is_finite() && centre.y.is_finite() && radius.is_finite() && radius > 0.0
+            }
+        };
+        if !valid {
+            return Err(ModelError::Invalid(
+                "a guide needs two distinct points or a radius",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes a guide.
+    pub fn remove_guide(&mut self, id: Id) -> Result<Guide, ModelError> {
+        let at = self
+            .guides
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ModelError::NotFound(id))?;
+        Ok(self.guides.remove(at))
     }
 
     /// Removes a column.
@@ -342,9 +518,24 @@ impl Project {
             || self
                 .beams
                 .iter()
-                .any(|b| b.story == id || b.level.story == id);
+                .any(|b| b.story == id || b.level.story == id)
+            || self
+                .roofs
+                .iter()
+                .any(|r| r.story == id || r.eaves.story == id)
+            || self
+                .meshes
+                .iter()
+                .any(|m| m.story == id || m.level.story == id)
+            || self
+                .stairs
+                .iter()
+                .any(|s| s.story == id || s.bottom.story == id || s.top.story == id)
+            || self.guides.iter().any(|g| g.story == id);
         if used {
-            return Err(ModelError::Invalid("walls still refer to this story"));
+            return Err(ModelError::Invalid(
+                "elements or guides still refer to this story",
+            ));
         }
         let at = self
             .stories
@@ -361,9 +552,12 @@ impl Project {
             .iter()
             .flat_map(|w| &w.layers)
             .chain(self.slabs.iter().flat_map(|s| &s.layers))
+            .chain(self.roofs.iter().flat_map(|r| &r.layers))
             .any(|l| l.material == id || l.framing.is_some_and(|f| f.material == id));
         let in_structure = self.columns.iter().any(|c| c.material == id)
-            || self.beams.iter().any(|b| b.material == id);
+            || self.beams.iter().any(|b| b.material == id)
+            || self.meshes.iter().any(|m| m.material == id)
+            || self.stairs.iter().any(|s| s.material == id);
         if in_layers || in_structure {
             return Err(ModelError::Invalid("elements still use this material"));
         }
@@ -456,4 +650,16 @@ impl Project {
         }
         Ok(previous)
     }
+}
+
+/// Whether a closed outline has at least three points and an area.
+fn encloses(outline: &[Point]) -> bool {
+    let n = outline.len();
+    let twice: f64 = (0..n)
+        .map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum();
+    n >= 3 && twice.abs() >= 1.0
 }

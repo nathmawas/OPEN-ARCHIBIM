@@ -24,3 +24,6 @@ expect:
     beam or a chain of beams.
   - A wall with no length is not made; two clicks on the same point give
     nothing.
+  - While drawing, the length and the angle of the wall are shown next to
+    the pointer. Typing digits sets the length; after Tab or "<", they set
+    the angle in degrees. An angle alone takes the length from the pointer.

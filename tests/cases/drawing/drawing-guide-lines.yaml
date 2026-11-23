@@ -1,0 +1,23 @@
+id: drawing-guide-lines
+title: An edge the pointer passes over offers guide lines
+status: proposed
+given: |
+  A wall face at 30 degrees, 4000 long. The pointer has passed over it, so
+  it is picked up; the two last edges passed over stay picked up.
+when: |
+  The architect moves the pointer, or draws a wall from a point 2000 away
+  from the face.
+expect:
+  - Beyond the end of the face, the pointer snaps onto its extension, with
+    a dashed line from the end.
+  - Through each end of the face, the pointer snaps onto the line square to
+    it.
+  - Where two guide lines cross, the pointer snaps to the crossing.
+  - Drawing from elsewhere, a wall nearly parallel or square to the face
+    locks onto that direction, with or without Shift.
+  - Near the foot of the perpendicular from the last point on the face, or
+    on its extension, the pointer snaps to it, shown by a right-angle mark.
+  - Every straight edge and arc can be divided in 2 to 12 equal parts, and
+    angles snap every 15, 30, 45 or 90 degrees.
+  - Every one of these aids can be turned off; Escape forgets the picked
+    edges.

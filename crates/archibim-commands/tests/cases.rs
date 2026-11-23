@@ -6,13 +6,17 @@
 
 use archibim_commands::{Command, History};
 use archibim_geometry::{
-    LayerPlan, Phase, beam_outline, column_outline, model_prisms, plan_layers, polygon_area,
+    LayerPlan, Phase, beam_outline, column_outline, mesh_blocks, mesh_contours, mesh_triangles,
+    model_prisms, plan_layers, polygon_area, roof_blocks, roof_faces, roof_overhang, stair_steps,
 };
 use archibim_model::{
-    Align, Anchor, Beam, Column, Framing, Hand, Id, JunctionMode, Layer, LayerRole, LevelKind,
-    LevelRef, Material, NominalSize, Opening, OpeningKind, Operation, Part, Performance, Point,
-    Project, RenovationStatus, Slab, Story, Wall, WallReference,
+    Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, JunctionMode, Layer,
+    LayerRole, LevelKind, LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind,
+    Operation, Part, Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane,
+    Slab, Stair, Story, Wall, WallReference,
 };
+
+use std::f64::consts::FRAC_PI_2;
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 
@@ -772,6 +776,7 @@ fn slabs_columns_and_beams_are_added_edited_and_undone() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 300.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -872,6 +877,7 @@ fn views_3d_model() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 300.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -1095,6 +1101,7 @@ fn structure_placed_point() -> Result {
         angle: 0.0,
         width: 300.0,
         depth: 200.0,
+        round: false,
         material: concrete,
         bottom: level(f.story0),
         top: level(f.story1),
@@ -1121,6 +1128,18 @@ fn structure_placed_point() -> Result {
         close(y0, 1000.0) && close(y1, 1300.0),
         "turned around the click"
     );
+    let round = Column {
+        round: true,
+        anchor: Anchor::default(),
+        width: 400.0,
+        ..column.clone()
+    };
+    let (x0, y0, x1, y1) = bounds(&column_outline(&round));
+    assert!(
+        close(x0, 800.0) && close(x1, 1200.0),
+        "diameter 400 round the click"
+    );
+    assert!(close(y0, 800.0) && close(y1, 1200.0));
     let wider = Column {
         width: 500.0,
         ..column.clone()
@@ -1204,5 +1223,406 @@ fn walls_curved() -> Result {
         f.h.run(Command::ReplaceWall(wall)).is_err(),
         "not a full turn"
     );
+    Ok(())
+}
+
+fn rect_outline(w: f64, d: f64) -> Vec<Point> {
+    [(0.0, 0.0), (w, 0.0), (w, d), (0.0, d)]
+        .iter()
+        .map(|&(x, y)| Point::new(x, y))
+        .collect()
+}
+
+#[test]
+fn roofs_slopes_and_gables() -> Result {
+    let mut f = Fixture::new()?;
+    let tiles = f.material("tiles", 3)?;
+    let insulation = f.material("insulation", 2)?;
+    let timber = f.material("timber", 4)?;
+    let eaves = LevelRef {
+        story: f.story1,
+        kind: LevelKind::Finished,
+        offset: 0.0,
+    };
+    let roof_of = |f: &mut Fixture, slopes: [Option<f64>; 4], overhang: f64| Roof {
+        id: f.h.new_id(),
+        story: f.story1,
+        outline: rect_outline(10_000.0, 6_000.0),
+        edges: slopes
+            .iter()
+            .map(|&slope| RoofEdge { slope, overhang })
+            .collect(),
+        layers: [(tiles, 40.0), (insulation, 200.0), (timber, 60.0)]
+            .iter()
+            .map(|&(m, t)| layer_of(LayerRole::LoadBearing, m, t))
+            .collect(),
+        eaves,
+        plane: RoofPlane::Top,
+    };
+    let s45 = Some(45f64.to_radians());
+    let top_of = |blocks: &[archibim_geometry::Block]| {
+        blocks
+            .iter()
+            .flat_map(|b| b.top.iter().copied())
+            .fold(f64::MIN, f64::max)
+    };
+
+    // One sloped edge: shed; two opposite: gabled; all: hipped.
+    let shed = roof_of(&mut f, [s45, None, None, None], 0.0);
+    assert_eq!(roof_faces(&shed).len(), 1);
+    let hipped = roof_of(&mut f, [s45; 4], 0.0);
+    assert_eq!(roof_faces(&hipped).len(), 4);
+    let gabled = roof_of(&mut f, [s45, None, s45, None], 0.0);
+    assert_eq!(roof_faces(&gabled).len(), 2);
+
+    // Ridge 3 m above the eaves level (the top of the build-up).
+    let id = gabled.id;
+    f.h.run(Command::AddRoof(gabled))?;
+    let eaves_z = f.h.project().level(&eaves)?;
+    assert!(close(eaves_z, 2_800.0));
+    let blocks = roof_blocks(f.h.project().roof(id)?, eaves_z, Phase::Proposed);
+    assert!((top_of(&blocks) - (eaves_z + 3_000.0)).abs() < 1.0);
+    // The gables stop on the outline.
+    let x = blocks.iter().flat_map(|b| &b.outline).map(|p| p.x);
+    assert!(close(x.clone().fold(f64::MAX, f64::min), 0.0));
+    assert!(close(x.fold(f64::MIN, f64::max), 10_000.0));
+
+    // Overhang on the eaves: out past the edge, lower along the slope.
+    let mut wide = f.h.project().roof(id)?.clone();
+    wide.edges[0].overhang = 500.0;
+    wide.edges[2].overhang = 500.0;
+    f.h.run(Command::ReplaceRoof(wide.clone()))?;
+    let (y0, y1) = ys(&[roof_overhang(&wide)]);
+    assert!(close(y0, -500.0) && close(y1, 6_500.0));
+    let blocks = roof_blocks(&wide, eaves_z, Phase::Proposed);
+    let low = blocks
+        .iter()
+        .step_by(3) // the top layer of each plane
+        .flat_map(|b| b.top.iter().copied())
+        .fold(f64::MAX, f64::min);
+    assert!((low - (eaves_z - 500.0)).abs() < 1.0, "{low}");
+
+    // Eaves level on the top or on the underside.
+    let mut flat = roof_of(&mut f, [None; 4], 0.0);
+    f.h.run(Command::AddRoof(flat.clone()))?;
+    assert!(close(
+        top_of(&roof_blocks(&flat, eaves_z, Phase::Proposed)),
+        eaves_z
+    ));
+    flat.plane = RoofPlane::Bottom;
+    f.h.run(Command::ReplaceRoof(flat.clone()))?;
+    assert!(close(
+        top_of(&roof_blocks(&flat, eaves_z, Phase::Proposed)),
+        eaves_z + 300.0
+    ));
+    // Layer thicknesses are square to the slope.
+    let steep = Some(60f64.to_radians());
+    let sloped = roof_of(&mut f, [steep, None, steep, None], 0.0);
+    let b = roof_blocks(&sloped, eaves_z, Phase::Proposed);
+    let rise = b[0].top[0] - b[0].bottom[0];
+    assert!(
+        (rise - 40.0 / 60f64.to_radians().cos()).abs() < 1e-6,
+        "{rise}"
+    );
+
+    // Refused: vertical, negative slope, no area, wrong number of settings.
+    // Accepted: flat slope, zero overhang, and a negative overhang (a roof
+    // stopping behind a parapet): a design choice.
+    for bad in [
+        [Some(FRAC_PI_2), None, None, None],
+        [Some(-0.1), None, None, None],
+    ] {
+        let r = roof_of(&mut f, bad, 0.0);
+        assert!(f.h.run(Command::AddRoof(r)).is_err(), "slope {bad:?}");
+    }
+    let r = roof_of(&mut f, [s45; 4], -300.0);
+    let inside = r.id;
+    f.h.run(Command::AddRoof(r))?;
+    let (y0, y1) = ys(&[roof_overhang(f.h.project().roof(inside)?)]);
+    assert!((y0 - 300.0).abs() < 1e-6 && (y1 - 5_700.0).abs() < 1e-6);
+    f.h.undo()?;
+    let mut r = roof_of(&mut f, [s45; 4], 0.0);
+    r.outline = rect_outline(10_000.0, 0.0);
+    assert!(f.h.run(Command::AddRoof(r)).is_err(), "no area");
+    let mut r = roof_of(&mut f, [s45; 4], 0.0);
+    r.edges.pop();
+    assert!(f.h.run(Command::AddRoof(r)).is_err(), "edge count");
+    let r = roof_of(&mut f, [Some(0.0), None, None, None], 0.0);
+    let zero = r.id;
+    f.h.run(Command::AddRoof(r))?;
+
+    // Undo restores the roof, step by step.
+    f.h.undo()?; // zero slope roof
+    assert!(f.h.project().roof(zero).is_err());
+    f.h.undo()?; // flat on its underside
+    assert_eq!(f.h.project().roofs.len(), 2);
+    assert_eq!(f.h.project().roofs[1].plane, RoofPlane::Top);
+    f.h.undo()?; // flat roof added
+    f.h.undo()?; // overhang
+    assert_eq!(f.h.project().roof(id)?.edges[0].overhang, 0.0);
+    f.h.undo()?;
+    assert!(f.h.project().roofs.is_empty());
+    Ok(())
+}
+
+fn mesh_point(x: f64, y: f64, z: f64) -> MeshPoint {
+    MeshPoint {
+        at: Point::new(x, y),
+        z,
+    }
+}
+
+#[test]
+fn terrain_mesh_from_survey() -> Result {
+    let mut f = Fixture::new()?;
+    let soil = f.material("soil", 1)?;
+    let outline = [
+        (0.0, 0.0),
+        (10_000.0, 0.0),
+        (10_000.0, 10_000.0),
+        (0.0, 10_000.0),
+    ]
+    .map(|(x, y)| mesh_point(x, y, 0.0))
+    .to_vec();
+    let mut mesh = Mesh {
+        id: f.h.new_id(),
+        story: f.story0,
+        outline,
+        inner: vec![],
+        level: LevelRef {
+            story: f.story0,
+            kind: LevelKind::Finished,
+            offset: 0.0,
+        },
+        bottom: -1_000.0,
+        material: soil,
+    };
+    f.h.run(Command::AddMesh(mesh.clone()))?;
+    assert_eq!(mesh_triangles(&mesh).1.len(), 2);
+
+    // A point inside at 2 m splits the terrain around it.
+    mesh.inner = vec![mesh_point(5_000.0, 5_000.0, 2_000.0)];
+    f.h.run(Command::ReplaceMesh(mesh.clone()))?;
+    let (points, triangles) = mesh_triangles(&mesh);
+    assert_eq!((points.len(), triangles.len()), (5, 4));
+    // A point outside is kept but has no effect.
+    mesh.inner.push(mesh_point(50_000.0, 0.0, 9_000.0));
+    f.h.run(Command::ReplaceMesh(mesh.clone()))?;
+    assert_eq!(f.h.project().mesh(mesh.id)?.inner.len(), 2);
+    assert_eq!(mesh_triangles(&mesh).0.len(), 5);
+    assert_eq!(mesh_triangles(&mesh).1.len(), 4);
+
+    // Surface through every point, solid down to the flat underside.
+    let blocks = mesh_blocks(&mesh, 0.0);
+    assert_eq!(blocks.len(), 4);
+    assert!(
+        blocks
+            .iter()
+            .all(|b| b.bottom.iter().all(|&z| close(z, -1_000.0)))
+    );
+    let tops: Vec<f64> = blocks.iter().flat_map(|b| b.top.clone()).collect();
+    assert!(tops.iter().any(|&z| close(z, 2_000.0)));
+    assert!(tops.iter().all(|&z| (0.0..=2_000.0).contains(&z)));
+
+    // Contours every 0.5 m: 0.5, 1 and 1.5 m, nothing at the foot or top.
+    let contours = mesh_contours(&mesh, 0.0, 500.0);
+    let mut heights: Vec<f64> = contours.iter().map(|c| c.0).collect();
+    heights.sort_by(f64::total_cmp);
+    heights.dedup();
+    assert_eq!(heights, vec![500.0, 1_000.0, 1_500.0]);
+    // The stronger line every 2.5 m is above this hill.
+    assert!(mesh_contours(&mesh, 0.0, 2_500.0).is_empty());
+
+    // An outline without area is refused.
+    let mut bad = mesh.clone();
+    for p in &mut bad.outline {
+        p.at.y = 0.0;
+    }
+    assert!(f.h.run(Command::ReplaceMesh(bad)).is_err());
+
+    // Undo restores the heights.
+    f.h.undo()?;
+    assert_eq!(f.h.project().mesh(mesh.id)?.inner.len(), 1);
+    f.h.undo()?;
+    assert!(f.h.project().mesh(mesh.id)?.inner.is_empty());
+    f.h.undo()?;
+    assert!(f.h.project().mesh(mesh.id).is_err());
+    Ok(())
+}
+
+#[test]
+fn stairs_walking_line() -> Result {
+    let mut f = Fixture::new()?;
+    let concrete = f.material("concrete", 9)?;
+    let level = |story| LevelRef {
+        story,
+        kind: LevelKind::Finished,
+        offset: 0.0,
+    };
+    let mut stair = Stair {
+        id: f.h.new_id(),
+        story: f.story0,
+        path: vec![Point::new(0.0, 0.0), Point::new(3_750.0, 0.0)],
+        width: 900.0,
+        bottom: level(f.story0),
+        top: level(f.story1),
+        risers: None,
+        material: concrete,
+    };
+    f.h.run(Command::AddStair(stair.clone()))?;
+    let steps_of = |f: &Fixture, s: &Stair| {
+        let p = f.h.project();
+        Ok::<_, archibim_model::ModelError>(stair_steps(s, p.level(&s.bottom)?, p.level(&s.top)?))
+    };
+
+    let steps = steps_of(&f, &stair)?;
+    assert_eq!(steps.risers, 16);
+    assert!(close(steps.riser, 175.0) && close(steps.going, 250.0));
+    assert_eq!(steps.treads.len(), 15);
+    assert!(close(steps.blondel(), 600.0));
+    // The upper floor is the last tread: one riser above the last tread.
+    assert!(close(
+        *steps.heights.last().ok_or("no tread")?,
+        2_800.0 - 175.0
+    ));
+    assert!(close(polygon_area(&steps.treads[0]), 250.0 * 900.0));
+
+    // By hand: 14 risers, the going follows; never refused.
+    stair.risers = Some(14);
+    f.h.run(Command::ReplaceStair(stair.clone()))?;
+    let steps = steps_of(&f, &stair)?;
+    assert!(close(steps.riser, 200.0) && close(steps.going, 3_750.0 / 13.0));
+    assert_eq!(steps.treads.len(), 13);
+    assert!(steps.blondel() > 640.0, "outside the comfort range, kept");
+    stair.risers = Some(1);
+    f.h.run(Command::ReplaceStair(stair.clone()))?;
+    assert!(steps_of(&f, &stair)?.treads.is_empty());
+    let zero = Stair {
+        risers: Some(0),
+        ..stair.clone()
+    };
+    assert!(f.h.run(Command::ReplaceStair(zero)).is_err());
+
+    // A turn is the same element: treads wrap around the corner.
+    stair.risers = Some(5);
+    stair.path = vec![
+        Point::new(0.0, 0.0),
+        Point::new(1_000.0, 0.0),
+        Point::new(1_000.0, 1_000.0),
+    ];
+    f.h.run(Command::ReplaceStair(stair.clone()))?;
+    let steps = steps_of(&f, &stair)?;
+    assert_eq!(steps.treads.len(), 4);
+    assert!(close(steps.going, 500.0));
+    // Tread 2 ends on the corner; the one after it runs up the second flight.
+    assert_eq!(steps.treads[1].len(), 4);
+    assert!(steps.treads[2].iter().all(|p| p.x > 500.0));
+
+    // Changing the story heights changes the steps, keeping width and
+    // material.
+    f.h.run(Command::SetStoryLevels {
+        story: f.story1,
+        finished_level: 3_000.0,
+        floor_build_up: 0.0,
+    })?;
+    let steps = steps_of(&f, &stair)?;
+    assert!(close(steps.riser, 600.0));
+    assert_eq!(f.h.project().stair(stair.id)?.width, 900.0);
+    assert_eq!(f.h.project().stair(stair.id)?.material, concrete);
+
+    // Undo restores the stair.
+    f.h.undo()?; // story heights
+    f.h.undo()?; // turn
+    assert_eq!(f.h.project().stair(stair.id)?.risers, Some(1));
+    f.h.undo()?;
+    f.h.undo()?;
+    assert_eq!(f.h.project().stair(stair.id)?.risers, None);
+    f.h.undo()?;
+    assert!(f.h.project().stair(stair.id).is_err());
+    // A stair needs a walking line and a width.
+    let mut bad = stair.clone();
+    bad.path.truncate(1);
+    assert!(f.h.run(Command::AddStair(bad)).is_err());
+    stair.width = 0.0;
+    assert!(f.h.run(Command::AddStair(stair)).is_err());
+    Ok(())
+}
+
+#[test]
+fn guides_are_added_edited_cleared_and_undone() -> Result {
+    let mut f = Fixture::new()?;
+    let line = GuideShape::Line {
+        a: Point::new(0.0, 0.0),
+        b: Point::new(1000.0, 0.0),
+    };
+    let circle = GuideShape::Circle {
+        centre: Point::new(500.0, 500.0),
+        radius: 300.0,
+    };
+    let (l, c) = (f.h.new_id(), f.h.new_id());
+    let story = f.story0;
+    let guide = |id, shape| Guide { id, story, shape };
+    let (gl, gc) = (guide(l, line), guide(c, circle));
+    assert_eq!(f.h.run(Command::AddGuide(gl.clone()))?, vec![l]);
+    f.h.run(Command::AddGuide(gc.clone()))?;
+    let two = f.h.project().clone();
+    // Edit, then undo and redo the edit.
+    let moved = Guide {
+        shape: GuideShape::Circle {
+            centre: Point::new(0.0, 0.0),
+            radius: 50.0,
+        },
+        ..gc.clone()
+    };
+    assert_eq!(f.h.run(Command::ReplaceGuide(moved.clone()))?, vec![c]);
+    assert_eq!(f.h.project().guide(c)?, &moved);
+    f.h.undo()?;
+    assert_eq!(f.h.project(), &two);
+    f.h.redo()?;
+    assert_eq!(f.h.project().guide(c)?, &moved);
+    f.h.undo()?;
+    // A refused command changes nothing.
+    let bad = Guide {
+        shape: GuideShape::Circle {
+            centre: Point::new(0.0, 0.0),
+            radius: 0.0,
+        },
+        ..gc.clone()
+    };
+    assert!(f.h.run(Command::ReplaceGuide(bad)).is_err());
+    assert!(f.h.run(Command::AddGuide(gl.clone())).is_err(), "same id");
+    assert!(f.h.run(Command::RemoveGuide(Id(9999))).is_err());
+    // The story keeps its guides.
+    assert!(f.h.run(Command::RemoveStory(f.story0)).is_err());
+    assert_eq!(f.h.project(), &two);
+    // Clearing the story's guides is one undo step.
+    f.h.run(Command::Group(vec![
+        Command::RemoveGuide(l),
+        Command::RemoveGuide(c),
+    ]))?;
+    assert!(f.h.project().guides.is_empty());
+    f.h.undo()?;
+    // Identifiers kept; a restored guide goes back at the end of the list,
+    // as for every other element.
+    let mut back = f.h.project().guides.clone();
+    back.sort_by_key(|g| g.id.0);
+    assert_eq!(back, two.guides);
+    // A group that fails half way is rolled back whole.
+    let after = f.h.project().clone();
+    let r = f.h.run(Command::Group(vec![
+        Command::RemoveGuide(l),
+        Command::RemoveGuide(Id(9999)),
+    ]));
+    assert!(r.is_err());
+    assert_eq!(f.h.project(), &after);
+    // The two additions undo and redo one after the other.
+    f.h.undo()?;
+    f.h.undo()?;
+    assert!(f.h.project().guides.is_empty());
+    f.h.redo()?;
+    f.h.redo()?;
+    let mut back = f.h.project().guides.clone();
+    back.sort_by_key(|g| g.id.0);
+    assert_eq!(back, two.guides);
     Ok(())
 }

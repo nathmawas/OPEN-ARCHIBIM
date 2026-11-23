@@ -1,6 +1,5 @@
-//! The wall tool: one wall, a chain of walls or a rectangle, with lengths
-//! typed at the keyboard. The clicks are the walls' reference line, chosen
-//! in the template.
+//! The wall tool: one wall, a chain of walls or a rectangle. The clicks are
+//! the walls' reference line, chosen in the template.
 
 use archibim_commands::{Command, History};
 use archibim_model::{Point, Wall};
@@ -33,7 +32,10 @@ pub struct WallTool {
     pub method: WallMethod,
     /// The points clicked in the current chain or rectangle.
     points: Vec<Point>,
-    typed: String,
+    /// How far the pointer has turned around the centre of an arc, and
+    /// where it was last.
+    turn: f64,
+    last_angle: Option<f64>,
 }
 
 impl WallTool {
@@ -43,8 +45,39 @@ impl WallTool {
             template,
             method: WallMethod::Chain,
             points: Vec::new(),
-            typed: String::new(),
+            turn: 0.0,
+            last_angle: None,
         }
+    }
+
+    /// The pointer moved to `p`: an arc follows it round its centre, so it
+    /// can turn past a half circle.
+    pub fn hover(&mut self, p: Point) {
+        let (WallMethod::Arc, &[c, _]) = (self.method, self.points.as_slice()) else {
+            self.last_angle = None;
+            return;
+        };
+        if distance(c, p) < 1.0 {
+            return;
+        }
+        let a = (p.y - c.y).atan2(p.x - c.x);
+        if let Some(previous) = self.last_angle {
+            let tau = std::f64::consts::TAU;
+            let mut step = (a - previous).rem_euclid(tau);
+            if step > std::f64::consts::PI {
+                step -= tau;
+            }
+            self.turn = (self.turn + step).clamp(-tau + 1e-3, tau - 1e-3);
+        }
+        self.last_angle = Some(a);
+    }
+
+    /// The start angle and the turn of the arc being drawn towards `p`: as
+    /// far as the pointer went round, or else the shorter way.
+    fn arc_turn(&self, c: Point, a: Point, p: Point) -> Option<(f64, f64)> {
+        let (from, shorter) = arc_sweep(c, a, p)?;
+        let followed = self.last_angle.is_some() && self.turn.abs() > 1e-6;
+        Some((from, if followed { self.turn } else { shorter }))
     }
 
     /// Where the wall being drawn starts, if one is.
@@ -57,59 +90,17 @@ impl WallTool {
         &self.points
     }
 
-    /// The length typed so far, in millimetres.
-    pub fn typed(&self) -> &str {
-        &self.typed
-    }
-
     /// A click: starts drawing, or places the next point. Returns true when
     /// walls were added.
     pub fn click(&mut self, history: &mut History, p: Point) -> bool {
-        let p = match self.start() {
-            Some(start) => self.typed_end(start, p).unwrap_or(p),
-            None => p,
-        };
-        self.typed.clear();
         self.place(history, p)
-    }
-
-    /// Enter: ends the wall at the typed length, towards the pointer.
-    pub fn enter(&mut self, history: &mut History, toward: Option<Point>) -> bool {
-        let (Some(start), Some(toward)) = (self.start(), toward) else {
-            return false;
-        };
-        let Some(end) = self.typed_end(start, toward) else {
-            return false;
-        };
-        self.typed.clear();
-        self.place(history, end)
-    }
-
-    /// The end of a wall of the typed length, from `start` towards `toward`.
-    pub fn typed_end(&self, start: Point, toward: Point) -> Option<Point> {
-        let length: f64 = self.typed.replace(',', ".").parse().ok()?;
-        let (dx, dy) = (toward.x - start.x, toward.y - start.y);
-        let norm = (dx * dx + dy * dy).sqrt();
-        (length > 0.0 && norm > 0.0)
-            .then(|| Point::new(start.x + dx / norm * length, start.y + dy / norm * length))
-    }
-
-    /// A typed character: digits and a decimal separator build the length.
-    pub fn type_char(&mut self, c: char) {
-        if self.start().is_some() && (c.is_ascii_digit() || c == '.' || c == ',') {
-            self.typed.push(c);
-        }
-    }
-
-    /// Backspace: erases the last typed character.
-    pub fn erase(&mut self) {
-        self.typed.pop();
     }
 
     /// Escape: stops drawing.
     pub fn stop(&mut self) {
         self.points.clear();
-        self.typed.clear();
+        self.turn = 0.0;
+        self.last_angle = None;
     }
 
     /// What the next click would draw, as a line through its points, for
@@ -126,7 +117,7 @@ impl WallTool {
                 Some(arc_points(c, r, 0.0, std::f64::consts::TAU))
             }
             (WallMethod::Arc, &[c, a]) => {
-                let (from, sweep) = arc_sweep(c, a, p)?;
+                let (from, sweep) = self.arc_turn(c, a, p)?;
                 Some(arc_points(c, distance(c, a), from, sweep))
             }
             _ => None,
@@ -166,13 +157,17 @@ impl WallTool {
                 history.run(Command::Group(commands)).is_ok()
             }
             WallMethod::Arc => match *self.points.as_slice() {
-                [_] => {
+                [c] => {
                     self.points.push(p);
+                    // The pointer starts turning from the start of the arc.
+                    self.turn = 0.0;
+                    self.last_angle = Some((p.y - c.y).atan2(p.x - c.x));
                     false
                 }
                 [c, a] => {
+                    let turn = self.arc_turn(c, a, p);
                     self.stop();
-                    let Some((_, sweep)) = arc_sweep(c, a, p) else {
+                    let Some((_, sweep)) = turn else {
                         return false;
                     };
                     let r = distance(c, a);
@@ -362,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn walls_chain_and_take_the_typed_length() -> Result {
+    fn walls_chain() -> Result {
         let (mut h, mut tool) = setup()?;
         assert!(
             !tool.click(&mut h, Point::new(0.0, 0.0)),
@@ -372,12 +367,11 @@ mod tests {
             tool.click(&mut h, Point::new(3000.0, 0.0)),
             "second click adds"
         );
-        "4000".chars().for_each(|c| tool.type_char(c));
-        assert!(tool.enter(&mut h, Some(Point::new(3000.0, 10.0))));
+        assert!(tool.click(&mut h, Point::new(3000.0, 4000.0)));
         let walls = &h.project().walls;
         assert_eq!(walls.len(), 2);
         assert_eq!(walls[1].start, Point::new(3000.0, 0.0), "chained");
-        assert_eq!(walls[1].end, Point::new(3000.0, 4000.0), "typed length");
+        assert_eq!(walls[1].end, Point::new(3000.0, 4000.0));
         h.undo()?;
         assert_eq!(h.project().walls.len(), 1, "undo removes the last wall");
         Ok(())
@@ -529,6 +523,33 @@ mod tests {
             "quarter, anticlockwise"
         );
         assert!(close(w.end, Point::new(0.0, 1000.0)), "on the circle");
+        Ok(())
+    }
+
+    #[test]
+    fn an_arc_follows_the_pointer_past_a_half_circle() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.method = WallMethod::Arc;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(1000.0, 0.0));
+        // Round anticlockwise through north and west to south.
+        for (x, y) in [
+            (700.0, 700.0),
+            (0.0, 1000.0),
+            (-700.0, 700.0),
+            (-1000.0, 0.0),
+            (-700.0, -700.0),
+            (0.0, -1000.0),
+        ] {
+            tool.hover(Point::new(x, y));
+        }
+        assert!(tool.click(&mut h, Point::new(0.0, -1000.0)));
+        let w = &h.project().walls[0];
+        assert!(
+            (w.sweep - 1.5 * std::f64::consts::PI).abs() < 1e-9,
+            "{}",
+            w.sweep
+        );
         Ok(())
     }
 }

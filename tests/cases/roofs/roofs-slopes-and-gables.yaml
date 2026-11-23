@@ -1,0 +1,30 @@
+id: roofs-slopes-and-gables
+title: A roof is drawn by its outline; each edge has a slope or is a gable
+status: proposed
+given: |
+  Story 0 at level 0, story 1 at 2800. Walls of a 10 x 6 m rectangle. A roof
+  build-up of tiles 40, insulation 200 and timber 60.
+when: |
+  The architect draws the roof outline on the wall line, as for a slab
+  (polygon or rectangle, or the space bar on a contour). Every edge starts
+  with the slope and overhang of the settings.
+expect:
+  - One sloped edge gives a shed roof, two opposite ones a gabled roof, all
+    of them a hipped roof; ridges and hips come out of the slopes, nothing
+    else to draw.
+  - Two long edges at 45 degrees over a 6 m span meet on a ridge 3 m above
+    the eaves level.
+  - An edge made a gable stops the roof on a vertical cut; an overhang pushes
+    the roof out past the edge and lower, along its slope.
+  - The eaves level gives either the top or the underside of the build-up,
+    as the architect chooses; layer thicknesses are square to the slope.
+  - In plan the roof shows its overhang, its ridges and hips, and the wall
+    line dashed.
+  - A slope between flat and vertical, any overhang, and an
+    outline with an area are accepted; a negative overhang too (a roof
+    stopping behind a parapet). A vertical slope is refused. Undo
+    restores the roof.
+  - Not yet - L-shaped outlines (hips and valleys of a concave outline),
+    walls trimmed under the roof, layers that each stop at their own limit,
+    an eaves height per edge, gutters, fascias, skylights and dormers.
+    A re-entrant outline is accepted with a warning.

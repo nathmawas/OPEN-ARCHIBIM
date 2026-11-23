@@ -14,6 +14,7 @@ the old one.
 | [0006](0006-constructive-build-ups.md) | Constructive build-ups, owned by each element | Accepted |
 | [0007](0007-egui-interface.md) | egui for the interface, drawn through wgpu | Proposed |
 | [0008](0008-placed-by-reference.md) | Elements keep the line or point they were placed by | Proposed |
+| [0009](0009-placed-guides.md) | Guides placed by hand are project data, not building elements | Proposed |
 
 ## Format
 

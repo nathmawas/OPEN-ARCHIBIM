@@ -1,0 +1,54 @@
+id: drawing-instruments
+title: The next point is placed square, tangent, along, halfway or at a typed distance
+status: proposed
+given: |
+  A plan with a straight wall, a curved wall (an arc of radius 3000), a
+  beam, a roof, a terrain and a stair. The architect draws with the wall,
+  beam, slab, roof, terrain or stair tool; a first point is placed.
+when: |
+  The architect moves the pointer near the curved wall, near the middle of
+  any edge, types a length or an angle after Tab, or asks for the point
+  halfway between two points.
+expect:
+  - Near the curved wall, the pointer lands on its arc, its faces and the
+    middle of each.
+  - Near the point where a line from the last point touches the arc, the
+    pointer lands on that tangent point, with a dashed line from the last
+    point and a mark.
+  - Near the point where the line from the last point through the centre
+    meets the arc, the pointer lands on it, square to the arc, with a
+    right-angle mark.
+  - The middle of every straight edge snaps, whatever its element - wall
+    faces, beams, columns, roof, terrain and stair lines - and divisions
+    apply to all of them.
+  - With every tool that places a point (column and opening included),
+    digits typed give the length of the next segment towards the pointer;
+    Tab switches to the angle and back. The angle is in degrees, turned
+    anticlockwise from the previous segment carried on: 0 goes straight on,
+    90 turns left, -90 turns right; the first segment turns from the x
+    axis. A typed value holds while the other follows the pointer; a
+    click, or Enter, places the point.
+  - Directions snap to the angles chosen in the drawing aids and their
+    multiples - 30, 45, 60 and 90 by default, 15 on demand, and one more
+    angle of the architect's choice; with none chosen, the axes.
+    Positive angles turn anticlockwise, negative ones clockwise.
+  - Enter with nothing typed still closes an outline or ends a stair.
+  - Before the first point, with the pointer on the extension of a picked
+    edge, on an edge, or lined up with one point, a typed length places the
+    point at that distance from where it starts - the end of the edge
+    nearer the pointer, or the point it lines up with.
+  - The typed values show next to the pointer, or else the length and the
+    angle from the last point; Backspace erases. Escape first clears what
+    was typed, then the halfway or reference point being picked, then
+    stops drawing.
+  - The key M, or its button in the drawing aids, then two clicks on
+    points, places the point halfway between them; the two clicks place
+    nothing; the status bar says which point to click; Escape cancels.
+  - These aids change nothing in the model and are not undo steps. Points
+    on arcs turn off with the edges, middles of arcs with the middles,
+    tangents and points square to an arc with the guide lines.
+  - Not yet - typed values as x and y offsets; operators after a typed
+    value (2000+150).
+  - Guides placed by hand and the reference point are in the case
+    placed-guides.
+  - Not yet - an arc wall tangent to the previous wall.

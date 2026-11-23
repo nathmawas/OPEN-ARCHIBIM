@@ -2,12 +2,15 @@
 //! in place. Every change becomes one command when the user lets go.
 
 use archibim_commands::Command;
+use archibim_geometry::{contains, stair_steps};
 use archibim_model::{
-    Align, Anchor, Beam, Column, Id, LayerRole, Opening, Project, Slab, Wall, WallReference,
+    Align, Anchor, Beam, Column, Guide, GuideShape, Id, Layer, LayerRole, Material, Mesh,
+    MeshPoint, Opening, Point, Project, RenovationStatus, Roof, RoofPlane, Slab, Stair, Wall,
+    WallReference,
 };
 use egui::{DragValue, Response, Ui};
 
-use crate::i18n::t;
+use crate::i18n::{label, t};
 
 /// Any element the palette can show.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +25,14 @@ pub enum Element {
     Beam(Beam),
     /// An opening.
     Opening(Opening),
+    /// A roof.
+    Roof(Roof),
+    /// A terrain mesh.
+    Mesh(Mesh),
+    /// A stair.
+    Stair(Stair),
+    /// A guide placed by hand.
+    Guide(Guide),
 }
 
 impl Element {
@@ -32,6 +43,10 @@ impl Element {
             .or_else(|| project.column(id).ok().cloned().map(Self::Column))
             .or_else(|| project.beam(id).ok().cloned().map(Self::Beam))
             .or_else(|| project.opening(id).ok().cloned().map(Self::Opening))
+            .or_else(|| project.roof(id).ok().cloned().map(Self::Roof))
+            .or_else(|| project.mesh(id).ok().cloned().map(Self::Mesh))
+            .or_else(|| project.stair(id).ok().cloned().map(Self::Stair))
+            .or_else(|| project.guide(id).ok().cloned().map(Self::Guide))
     }
 
     fn id(&self) -> Id {
@@ -41,6 +56,10 @@ impl Element {
             Self::Column(e) => e.id,
             Self::Beam(e) => e.id,
             Self::Opening(e) => e.id,
+            Self::Roof(e) => e.id,
+            Self::Mesh(e) => e.id,
+            Self::Stair(e) => e.id,
+            Self::Guide(e) => e.id,
         }
     }
 
@@ -51,6 +70,10 @@ impl Element {
             Self::Column(e) => Command::ReplaceColumn(e),
             Self::Beam(e) => Command::ReplaceBeam(e),
             Self::Opening(e) => Command::ReplaceOpening(e),
+            Self::Roof(e) => Command::ReplaceRoof(e),
+            Self::Mesh(e) => Command::ReplaceMesh(e),
+            Self::Stair(e) => Command::ReplaceStair(e),
+            Self::Guide(e) => Command::ReplaceGuide(e),
         }
     }
 
@@ -63,6 +86,10 @@ impl Element {
             Self::Column(_) => Command::RemoveColumn(id),
             Self::Beam(_) => Command::RemoveBeam(id),
             Self::Opening(_) => Command::RemoveOpening(id),
+            Self::Roof(_) => Command::RemoveRoof(id),
+            Self::Mesh(_) => Command::RemoveMesh(id),
+            Self::Stair(_) => Command::RemoveStair(id),
+            Self::Guide(_) => Command::RemoveGuide(id),
         }
     }
 }
@@ -110,7 +137,7 @@ impl Properties {
             ui.label(t("props.none"));
             return None;
         };
-        let edit = fields(ui, draft);
+        let edit = fields(ui, draft, project);
         self.editing = edit.active;
         ui.separator();
         if let Element::Wall(w) = draft
@@ -157,15 +184,14 @@ pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
 
 /// Draws the parameters of `element`, edited in place, and tells what the
 /// widgets did.
-pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
+pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> Edit {
+    let materials = &project.materials;
     let mut edit = Edit::default();
     let e = &mut edit;
     match element {
         Element::Wall(w) => {
             ui.label(t("el.wall"));
-            for layer in &mut w.layers {
-                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
-            }
+            build_up(ui, e, &mut w.layers, materials, "buildup.layers");
             number(ui, e, "p.bottom_offset", &mut w.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
             ui.label(t("settings.reference"));
@@ -182,15 +208,17 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
         }
         Element::Slab(s) => {
             ui.label(t("el.slab"));
-            for layer in &mut s.layers {
-                number(ui, e, role_key(layer.role), &mut layer.thickness, 1.0);
-            }
+            build_up(ui, e, &mut s.layers, materials, "buildup.layers_slab");
             number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
         }
         Element::Column(c) => {
             ui.label(t("el.column"));
-            number(ui, e, "p.width", &mut c.width, 1.0);
-            number(ui, e, "p.depth", &mut c.depth, 1.0);
+            e.track(&ui.checkbox(&mut c.round, t("p.round")));
+            let width = if c.round { "p.diameter" } else { "p.width" };
+            number(ui, e, width, &mut c.width, 1.0);
+            if !c.round {
+                number(ui, e, "p.depth", &mut c.depth, 1.0);
+            }
             number(ui, e, "p.bottom_offset", &mut c.bottom.offset, -1.0e6);
             number(ui, e, "p.top_offset", &mut c.top.offset, -1.0e6);
             angle(ui, e, &mut c.angle);
@@ -215,9 +243,371 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element) -> Edit {
                 number(ui, e, "p.part", &mut part.width, 1.0);
             }
         }
+        Element::Roof(r) => roof(ui, e, r, materials),
+        Element::Mesh(m) => mesh(ui, e, m, materials),
+        Element::Stair(s) => stair(ui, e, s, project),
+        Element::Guide(g) => match &mut g.shape {
+            GuideShape::Line { .. } => {
+                ui.label(t("el.guide_line"));
+            }
+            GuideShape::Circle { radius, .. } => {
+                ui.label(t("el.guide_circle"));
+                number(ui, e, "p.radius", radius, 1.0);
+            }
+        },
     }
     edit
 }
+
+/// A roof: edge by edge a slope or a gable and the overhang, then the
+/// eaves level, the plane it gives, and the build-up.
+fn roof(ui: &mut Ui, e: &mut Edit, r: &mut Roof, materials: &[Material]) {
+    ui.label(t("el.roof"));
+    let numbered = r.edges.len() > 1;
+    ui.label(t(if numbered {
+        "roof.edges_hint"
+    } else {
+        "roof.all_edges"
+    }));
+    // ponytail: a gable given a slope again takes the first sloped edge's;
+    // keep each edge's own once edges remember it.
+    let fallback = r
+        .edges
+        .iter()
+        .find_map(|edge| edge.slope)
+        .unwrap_or(35f64.to_radians());
+    for (i, edge) in r.edges.iter_mut().enumerate() {
+        if numbered {
+            ui.separator();
+            ui.label(format!("{} {}", t("roof.edge"), i + 1));
+        }
+        if let Some(slope) = &mut edge.slope {
+            ui.horizontal(|ui| {
+                ui.label(t("roof.slope"));
+                let mut degrees = slope.to_degrees();
+                let s = ui.add(
+                    DragValue::new(&mut degrees)
+                        .speed(0.5)
+                        .range(0.0..=89.0)
+                        .suffix(" °"),
+                );
+                if s.changed() {
+                    *slope = degrees.to_radians();
+                }
+                e.track(&s);
+            });
+        }
+        number(ui, e, "roof.overhang", &mut edge.overhang, -1.0e5);
+        let mut gable = edge.slope.is_none();
+        let g = ui
+            .checkbox(&mut gable, t("roof.gable"))
+            .on_hover_text(t("roof.gable_hint"));
+        if g.changed() {
+            edge.slope = (!gable).then_some(fallback);
+        }
+        e.track(&g);
+    }
+    if numbered && ui.button(t("roof.apply_all")).clicked() {
+        let first = r.edges[0];
+        r.edges.iter_mut().for_each(|edge| *edge = first);
+        e.commit = true;
+    }
+    ui.separator();
+    number(ui, e, "p.eaves_offset", &mut r.eaves.offset, -1.0e6);
+    for (plane, key) in [
+        (RoofPlane::Bottom, "roof.plane_bottom"),
+        (RoofPlane::Top, "roof.plane_top"),
+    ] {
+        e.track(&ui.selectable_value(&mut r.plane, plane, t(key)));
+    }
+    // Alert, never refuse.
+    if !convex(&r.outline) {
+        ui.colored_label(ui.visuals().warn_fg_color, t("roof.concave_warning"));
+    }
+    ui.separator();
+    build_up(ui, e, &mut r.layers, materials, "buildup.layers_slab");
+}
+
+/// Whether a closed outline turns the same way at every corner.
+fn convex(outline: &[Point]) -> bool {
+    let n = outline.len();
+    let turns: Vec<f64> = (0..n)
+        .map(|i| {
+            let (a, b, c) = (outline[i], outline[(i + 1) % n], outline[(i + 2) % n]);
+            (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+        })
+        .filter(|t| t.abs() > 1e-6)
+        .collect();
+    turns.iter().all(|t| *t > 0.0) || turns.iter().all(|t| *t < 0.0)
+}
+
+/// A terrain mesh: the height of each point of its outline, the points
+/// inside it, its underside and material.
+fn mesh(ui: &mut Ui, e: &mut Edit, m: &mut Mesh, materials: &[Material]) {
+    ui.label(t("el.mesh"));
+    material(ui, e, &mut m.material, materials);
+    number(ui, e, "p.level_offset", &mut m.level.offset, -1.0e6);
+    number(ui, e, "mesh.bottom", &mut m.bottom, -1.0e6);
+    ui.label(t("mesh.points_hint"));
+    for (i, p) in m.outline.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(format!("{} {}", t("mesh.point"), i + 1));
+            let r = ui.add(DragValue::new(&mut p.z).speed(5.0).suffix(" mm"));
+            e.track(&r);
+        });
+    }
+    ui.separator();
+    ui.label(t("mesh.inner"));
+    let mut remove = None;
+    for (i, p) in m.inner.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            for value in [&mut p.at.x, &mut p.at.y, &mut p.z] {
+                e.track(&ui.add(DragValue::new(value).speed(5.0)));
+            }
+            if ui
+                .small_button("×")
+                .on_hover_text(t("buildup.remove"))
+                .clicked()
+            {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        m.inner.remove(i);
+        e.commit = true;
+    }
+    if !m.outline.is_empty() && ui.button(t("mesh.add_point")).clicked() {
+        // In the middle of the outline, at its average height: then moved
+        // and raised by hand.
+        let n = m.outline.len() as f64;
+        let sum = |f: fn(&MeshPoint) -> f64| m.outline.iter().map(f).sum::<f64>() / n;
+        m.inner.push(MeshPoint {
+            at: Point::new(sum(|p| p.at.x), sum(|p| p.at.y)),
+            z: sum(|p| p.z),
+        });
+        e.commit = true;
+    }
+    // Alerts, never refusals.
+    let outline: Vec<Point> = m.outline.iter().map(|p| p.at).collect();
+    let warn = ui.visuals().warn_fg_color;
+    if m.inner.iter().any(|p| !contains(&outline, p.at)) {
+        ui.colored_label(warn, t("mesh.outside_warning"));
+    }
+    if m.outline.iter().chain(&m.inner).any(|p| p.z < m.bottom) {
+        ui.colored_label(warn, t("mesh.below_warning"));
+    }
+}
+
+/// Usual comfort of a stair (French practice): 2 risers + going, and the
+/// riser height.
+// ponytail: French ranges written here; preset data by country (TOOLS.md,
+// rule 17).
+const BLONDEL: (f64, f64) = (600.0, 640.0);
+const RISER: (f64, f64) = (150.0, 200.0);
+
+/// A stair: width, levels, risers worked out or set, and what they give;
+/// a value outside the usual comfort is shown in the warning colour.
+fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
+    ui.label(t("el.stair"));
+    number(ui, e, "p.width", &mut s.width, 1.0);
+    number(ui, e, "p.bottom_offset", &mut s.bottom.offset, -1.0e6);
+    number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
+    material(ui, e, &mut s.material, &project.materials);
+    let (Ok(bottom), Ok(top)) = (project.level(&s.bottom), project.level(&s.top)) else {
+        return;
+    };
+    let steps = stair_steps(s, bottom, top);
+    ui.separator();
+    let mut auto = s.risers.is_none();
+    let a = ui.checkbox(&mut auto, t("stair.auto_risers"));
+    if a.changed() {
+        s.risers = (!auto).then_some(steps.risers);
+    }
+    e.track(&a);
+    ui.horizontal(|ui| {
+        ui.label(t("stair.risers"));
+        match &mut s.risers {
+            Some(n) => e.track(&ui.add(DragValue::new(n).range(1..=200))),
+            None => {
+                ui.label(steps.risers.to_string());
+            }
+        }
+    });
+    let warn = ui.visuals().warn_fg_color;
+    let value = |ui: &mut Ui, key, v: f64, range: Option<(f64, f64)>| {
+        let text = match range {
+            Some((lo, hi)) => format!("{} {v:.0} mm ({lo:.0} – {hi:.0})", t(key)),
+            None => format!("{} {v:.0} mm", t(key)),
+        };
+        if range.is_some_and(|(lo, hi)| !(lo..=hi).contains(&v)) {
+            ui.colored_label(warn, text);
+        } else {
+            ui.label(text);
+        }
+    };
+    value(ui, "stair.riser", steps.riser.abs(), Some(RISER));
+    value(ui, "stair.going", steps.going, None);
+    value(ui, "stair.blondel", steps.blondel(), Some(BLONDEL));
+}
+
+fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material]) {
+    let name = materials
+        .iter()
+        .find(|m| m.id == *id)
+        .map_or("?", |m| label(&m.name));
+    ui.horizontal(|ui| {
+        ui.label(t("p.material"));
+        egui::ComboBox::from_id_salt("element_material")
+            .selected_text(name)
+            .show_ui(ui, |ui| {
+                for m in materials {
+                    e.track(&ui.selectable_value(id, m.id, label(&m.name)));
+                }
+            });
+    });
+}
+
+/// The layers of a wall or a slab. One layer is a simple element, shown
+/// as its material and thickness; several make a build-up, each layer with
+/// its role, listed from the left face (the top of a slab).
+fn build_up(
+    ui: &mut Ui,
+    e: &mut Edit,
+    layers: &mut Vec<Layer>,
+    materials: &[Material],
+    title: &'static str,
+) {
+    let simple = layers.len() == 1;
+    ui.label(t(if simple { "buildup.simple" } else { title }));
+    let (mut remove, mut raise) = (None, None);
+    for (i, layer) in layers.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            if !simple {
+                egui::ComboBox::from_id_salt(("role", i))
+                    .selected_text(t(role_key(layer.role)))
+                    .show_ui(ui, |ui| {
+                        for role in ROLES {
+                            e.track(&ui.selectable_value(&mut layer.role, role, t(role_key(role))));
+                        }
+                    });
+            }
+            let name = |id| {
+                materials
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map_or("?", |m| label(&m.name))
+            };
+            egui::ComboBox::from_id_salt(("material", i))
+                .selected_text(name(layer.material))
+                .show_ui(ui, |ui| {
+                    for m in materials {
+                        e.track(&ui.selectable_value(&mut layer.material, m.id, label(&m.name)));
+                    }
+                });
+            let r = ui.add(
+                DragValue::new(&mut layer.thickness)
+                    .speed(1.0)
+                    .range(1.0..=1.0e5)
+                    .suffix(" mm"),
+            );
+            e.track(&r);
+            if !simple {
+                if i > 0
+                    && ui
+                        .small_button(egui::RichText::new("↑").monospace())
+                        .on_hover_text(t("buildup.up"))
+                        .clicked()
+                {
+                    raise = Some(i);
+                }
+                if ui
+                    .small_button("×")
+                    .on_hover_text(t("buildup.remove"))
+                    .clicked()
+                {
+                    remove = Some(i);
+                }
+            }
+        });
+    }
+    if let Some(i) = raise {
+        layers.swap(i - 1, i);
+        e.commit = true;
+    }
+    if let Some(i) = remove {
+        layers.remove(i);
+        e.commit = true;
+    }
+    if !simple {
+        ui.label(format!(
+            "{} {:.0} mm",
+            t("buildup.total"),
+            layers.iter().map(|l| l.thickness).sum::<f64>()
+        ));
+    }
+    ui.horizontal(|ui| {
+        if ui.button(t("buildup.add")).clicked()
+            && let Some(last) = layers.last()
+        {
+            // A thin finish on the right face, of the last material; the
+            // architect then sets it.
+            layers.push(Layer {
+                role: LayerRole::Finish,
+                thickness: 15.0,
+                status: RenovationStatus::New,
+                framing: None,
+                ..*last
+            });
+            e.commit = true;
+        }
+        if !simple && ui.button(t("buildup.make_simple")).clicked() {
+            *layers = vec![simplified(layers)];
+            e.commit = true;
+        }
+    });
+    // Alert, never refuse: removing or merging layers that are already
+    // built loses their renovation status.
+    if !simple && layers.iter().any(|l| l.status != RenovationStatus::New) {
+        ui.colored_label(ui.visuals().warn_fg_color, t("buildup.renovation_warning"));
+    }
+}
+
+/// One layer standing for a whole build-up: its total thickness, in the
+/// material of its first load-bearing layer, or of its thickest.
+pub(crate) fn simplified(layers: &[Layer]) -> Layer {
+    let thickness = layers.iter().map(|l| l.thickness).sum();
+    let main = layers
+        .iter()
+        .find(|l| l.role == LayerRole::LoadBearing)
+        .or_else(|| {
+            layers
+                .iter()
+                .max_by(|a, b| a.thickness.total_cmp(&b.thickness))
+        });
+    Layer {
+        role: LayerRole::LoadBearing,
+        thickness,
+        framing: None,
+        ..main.copied().unwrap_or(Layer {
+            role: LayerRole::LoadBearing,
+            material: Id(0),
+            thickness,
+            status: RenovationStatus::New,
+            framing: None,
+        })
+    }
+}
+
+const ROLES: [LayerRole; 7] = [
+    LayerRole::LoadBearing,
+    LayerRole::Insulation,
+    LayerRole::AirGap,
+    LayerRole::Membrane,
+    LayerRole::Lining,
+    LayerRole::Finish,
+    LayerRole::Covering,
+];
 
 fn number(ui: &mut Ui, edit: &mut Edit, key: &'static str, value: &mut f64, min: f64) {
     ui.horizontal(|ui| {
@@ -284,5 +674,104 @@ fn role_key(role: LayerRole) -> &'static str {
         LayerRole::Lining => "role.lining",
         LayerRole::Finish => "role.finish",
         LayerRole::Covering => "role.covering",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(role: LayerRole, material: u64, thickness: f64) -> Layer {
+        Layer {
+            role,
+            material: Id(material),
+            thickness,
+            status: RenovationStatus::New,
+            framing: None,
+        }
+    }
+
+    #[test]
+    fn a_build_up_made_simple_keeps_its_thickness_and_its_structure() {
+        let external = [
+            layer(LayerRole::Finish, 1, 20.0),
+            layer(LayerRole::Insulation, 2, 140.0),
+            layer(LayerRole::LoadBearing, 3, 200.0),
+            layer(LayerRole::Finish, 4, 15.0),
+        ];
+        let one = simplified(&external);
+        assert_eq!(one.thickness, 375.0);
+        assert_eq!(one.material, Id(3), "the load-bearing material");
+        let lining = [
+            layer(LayerRole::Finish, 1, 13.0),
+            layer(LayerRole::Insulation, 2, 100.0),
+        ];
+        assert_eq!(simplified(&lining).material, Id(2), "else the thickest");
+    }
+
+    #[test]
+    fn a_one_layer_build_up_made_simple_is_unchanged() {
+        let one = [layer(LayerRole::Finish, 7, 90.0)];
+        let simple = simplified(&one);
+        assert_eq!(simple.thickness, 90.0);
+        assert_eq!(simple.material, Id(7));
+        assert_eq!(simple.role, LayerRole::LoadBearing, "a simple wall bears");
+    }
+
+    #[test]
+    fn a_build_up_with_no_load_bearing_layer_takes_its_thickest() {
+        let l = [
+            layer(LayerRole::Finish, 1, 13.0),
+            layer(LayerRole::Insulation, 2, 100.0),
+            layer(LayerRole::Lining, 3, 13.0),
+        ];
+        let one = simplified(&l);
+        assert_eq!((one.material, one.thickness), (Id(2), 126.0));
+        // A tie keeps one of the thickest, whichever; the total holds.
+        let tie = [
+            layer(LayerRole::Finish, 1, 50.0),
+            layer(LayerRole::Insulation, 2, 50.0),
+        ];
+        let one = simplified(&tie);
+        assert!([Id(1), Id(2)].contains(&one.material));
+        assert_eq!(one.thickness, 100.0);
+    }
+
+    #[test]
+    fn the_first_load_bearing_layer_wins_even_when_thinner() {
+        let l = [
+            layer(LayerRole::LoadBearing, 1, 20.0),
+            layer(LayerRole::Insulation, 2, 300.0),
+            layer(LayerRole::LoadBearing, 3, 200.0),
+        ];
+        assert_eq!(simplified(&l).material, Id(1));
+    }
+
+    #[test]
+    fn making_simple_drops_the_framing_and_keeps_the_main_status() {
+        let framing = archibim_model::Framing {
+            material: Id(9),
+            width: 45.0,
+            spacing: 600.0,
+        };
+        let mut bearing = layer(LayerRole::LoadBearing, 3, 140.0);
+        bearing.framing = Some(framing);
+        bearing.status = RenovationStatus::Existing;
+        let l = [layer(LayerRole::Finish, 1, 12.0), bearing];
+        let one = simplified(&l);
+        assert_eq!(one.framing, None, "the members go with the layers");
+        assert_eq!(one.thickness, 152.0);
+        assert_eq!(
+            one.status,
+            RenovationStatus::Existing,
+            "from the main layer"
+        );
+    }
+
+    #[test]
+    fn an_empty_build_up_gives_a_zero_layer_without_panicking() {
+        let one = simplified(&[]);
+        assert_eq!(one.thickness, 0.0);
+        assert_eq!(one.role, LayerRole::LoadBearing);
     }
 }
