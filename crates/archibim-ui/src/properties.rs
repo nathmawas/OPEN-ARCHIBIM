@@ -49,7 +49,7 @@ impl Element {
             .or_else(|| project.guide(id).ok().cloned().map(Self::Guide))
     }
 
-    fn id(&self) -> Id {
+    pub(crate) fn id(&self) -> Id {
         match self {
             Self::Wall(e) => e.id,
             Self::Slab(e) => e.id,
@@ -152,7 +152,7 @@ impl Properties {
         }
         if ui.button(t("action.delete")).clicked() {
             self.editing = false;
-            return Some(draft.remove());
+            return crate::select::removal(project, &[draft.id()]);
         }
         (edit.commit && current.as_ref() != Some(draft)).then(|| {
             self.editing = false;

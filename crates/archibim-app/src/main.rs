@@ -9,6 +9,8 @@
 
 mod capture;
 mod demo;
+#[cfg(test)]
+mod selection;
 
 use capture::Capture;
 

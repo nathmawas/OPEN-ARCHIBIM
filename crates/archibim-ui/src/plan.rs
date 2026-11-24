@@ -17,6 +17,8 @@ pub(crate) const PLACED: Color32 = Color32::from_rgb(0, 150, 140);
 /// Colour of the reference point that typed values measure from.
 const REFERENCE: Color32 = Color32::from_rgb(140, 60, 170);
 pub(crate) const SELECTED: Color32 = Color32::from_rgb(0, 110, 200);
+/// Colour of a selection area that takes the elements it touches.
+const TOUCHED: Color32 = Color32::from_rgb(30, 140, 60);
 const SLAB: Color32 = Color32::from_gray(235);
 /// Fill of terrain meshes in plan.
 const TERRAIN: Color32 = Color32::from_rgb(232, 240, 222);
@@ -147,11 +149,11 @@ impl PlanView {
         painter: &Painter,
         project: &Project,
         plan: &[LayerPlan],
-        selection: Option<Id>,
+        selection: &[Id],
     ) {
         painter.rect_filled(self.rect, 0.0, Color32::WHITE);
         let stroke = |id: Id| {
-            if selection == Some(id) {
+            if selection.contains(&id) {
                 Stroke::new(2.5, SELECTED)
             } else {
                 Stroke::new(1.0, INK)
@@ -247,11 +249,11 @@ impl PlanView {
                     s.color,
                 );
             }
-            if selection == Some(roof.id) {
+            if selection.contains(&roof.id) {
                 self.numbers(painter, &roof.outline, true);
             }
         }
-        for mesh in project.meshes.iter().filter(|m| selection == Some(m.id)) {
+        for mesh in project.meshes.iter().filter(|m| selection.contains(&m.id)) {
             let outline: Vec<Point> = mesh.outline.iter().map(|p| p.at).collect();
             self.numbers(painter, &outline, false);
         }
@@ -381,6 +383,25 @@ impl PlanView {
             8.0,
             4.0,
         ));
+    }
+
+    /// An area drawn with the selection tool: solid and blue when it takes
+    /// the elements wholly inside, dashed and green when it takes those it
+    /// touches.
+    pub(crate) fn area(&self, painter: &Painter, area: &[Point], whole: bool) {
+        let color = if whole { SELECTED } else { TOUCHED };
+        let [r, g, b, _] = color.to_array();
+        self.fill(painter, area, Color32::from_rgba_unmultiplied(r, g, b, 30));
+        let mut points: Vec<Pos2> = area.iter().map(|q| self.screen(*q)).collect();
+        if let Some(&first) = points.first() {
+            points.push(first);
+        }
+        let stroke = Stroke::new(1.5, color);
+        if whole {
+            painter.add(Shape::line(points, stroke));
+        } else {
+            painter.extend(Shape::dashed_line(&points, stroke, 6.0, 4.0));
+        }
     }
 
     /// The guides of a snap, dashed, and a mark telling what it found.

@@ -5,6 +5,7 @@ mod i18n;
 mod model_view;
 mod plan;
 mod properties;
+mod select;
 mod snap;
 mod typed;
 mod wall_tool;
@@ -25,6 +26,8 @@ use model_view::ModelView;
 use plan::PlanView;
 use properties::fields;
 pub use properties::{Element, Properties};
+pub use select::SelectMethod;
+use select::{Combine, caught_in, removal};
 pub use snap::{BASE_ANGLES, PICKED_EDGES, Scene, Snap, SnapKind, SnapOptions};
 use typed::Typed;
 use wall_tool::rectangle;
@@ -159,7 +162,15 @@ pub struct Workspace {
     /// Each beam starts where the last one ended.
     beam_chain: bool,
     door: bool,
-    selection: Option<Id>,
+    /// The selected elements, in the order they were picked.
+    selection: Vec<Id>,
+    select_method: SelectMethod,
+    /// Polygons and lassos take the elements wholly inside, not those
+    /// touched.
+    select_whole: bool,
+    /// The rectangle or lasso being dragged with the selection tool: its
+    /// first corner and the pointer, or the points of its line.
+    dragging: Option<Vec<Point>>,
     properties: Properties,
     message: Option<String>,
     snap_options: SnapOptions,
@@ -217,7 +228,10 @@ impl Workspace {
             beam_start: None,
             beam_chain: false,
             door: false,
-            selection: None,
+            selection: Vec::new(),
+            select_method: SelectMethod::Rectangle,
+            select_whole: false,
+            dragging: None,
             properties: Properties::default(),
             message: None,
             snap_options: SnapOptions::default(),
@@ -250,7 +264,17 @@ impl Workspace {
     /// nothing.
     pub fn select(&mut self, id: Option<Id>) {
         self.tool = Tool::Select;
-        self.selection = id;
+        self.selection = id.into_iter().collect();
+    }
+
+    /// The selected elements, in the order they were picked.
+    pub fn selection(&self) -> &[Id] {
+        &self.selection
+    }
+
+    /// The active tool.
+    pub fn tool(&self) -> Tool {
+        self.tool
     }
 
     /// Shows the plan, the 3D view, or both.
@@ -315,12 +339,23 @@ impl Workspace {
         if self.show_settings {
             egui::Panel::right("properties").show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.selection.is_none() && self.tool != Tool::Select {
+                    if self.tool == Tool::Select {
+                        self.select_settings(ui);
+                        ui.separator();
+                    }
+                    if self.selection.is_empty() && self.tool != Tool::Select {
                         if let Some(command) = self.settings(ui, history.project()) {
                             changed |= self.run(history, command);
                         }
+                    } else if self.selection.len() > 1 {
+                        ui.heading(t("props.title"));
+                        ui.label(format!("{} {}", self.selection.len(), t("select.count")));
+                        if ui.button(t("action.delete")).clicked() {
+                            changed |= self.delete(history);
+                        }
                     } else if let Some(command) =
-                        self.properties.show(ui, history.project(), self.selection)
+                        self.properties
+                            .show(ui, history.project(), self.selection.first().copied())
                     {
                         changed |= self.run(history, command);
                     }
@@ -346,7 +381,11 @@ impl Workspace {
                 }
                 Tool::Guide if self.guide_method == GuideMethod::Line => t("guide.line"),
                 Tool::Guide => t("guide.circle"),
-                Tool::Select => "",
+                Tool::Select => t(match self.select_method {
+                    SelectMethod::Rectangle => "select.rectangle_hint",
+                    SelectMethod::Polygon => "select.polygon_hint",
+                    SelectMethod::Lasso => "select.lasso_hint",
+                }),
                 _ => t("draw.hint"),
             };
             ui.horizontal_wrapped(|ui| {
@@ -361,8 +400,8 @@ impl Workspace {
                 });
             });
         });
-        if self.dirty || self.model.stale(self.selection) {
-            self.model.rebuild(history.project(), self.selection);
+        if self.dirty || self.model.stale(&self.selection) {
+            self.model.rebuild(history.project(), &self.selection);
             self.dirty = false;
         }
         egui::CentralPanel::default().show(ui, |ui| match self.layout {
@@ -382,12 +421,8 @@ impl Workspace {
             self.dirty = true;
             ui.ctx().request_repaint();
         }
-        if self
-            .selection
-            .is_some_and(|id| Element::find(history.project(), id).is_none())
-        {
-            self.selection = None;
-        }
+        self.selection
+            .retain(|&id| Element::find(history.project(), id).is_some());
         changed
     }
 
@@ -432,7 +467,7 @@ impl Workspace {
             }
             ui.separator();
             let delete = item("menu.delete", keys(Modifiers::NONE, Key::Delete));
-            if ui.add_enabled(self.selection.is_some(), delete).clicked() {
+            if ui.add_enabled(!self.selection.is_empty(), delete).clicked() {
                 changed |= self.delete(history);
             }
         });
@@ -500,13 +535,10 @@ impl Workspace {
         matches!(done, Ok(Some(_)))
     }
 
-    /// Deletes the selected element.
+    /// Deletes the selected elements, in one undo step.
     fn delete(&mut self, history: &mut History) -> bool {
-        match self
-            .selection
-            .and_then(|id| Element::find(history.project(), id))
-        {
-            Some(element) => self.run(history, element.remove()),
+        match removal(history.project(), &self.selection) {
+            Some(command) => self.run(history, command),
             None => false,
         }
     }
@@ -779,6 +811,143 @@ impl Workspace {
         self.halfway = None;
         self.guide_edge = None;
         self.reference = None;
+        self.dragging = None;
+    }
+
+    /// Points are placed, or an area is being dragged.
+    fn pending(&self) -> bool {
+        !self.wall.points().is_empty()
+            || !self.slab_points.is_empty()
+            || self.beam_start.is_some()
+            || self.dragging.is_some()
+    }
+
+    /// The settings of the selection tool: how it draws an area, and what
+    /// a polygon or a lasso takes.
+    fn select_settings(&mut self, ui: &mut Ui) {
+        ui.heading(t("settings.title"));
+        ui.label(t("select.method"));
+        let before = self.select_method;
+        for (method, key) in [
+            (SelectMethod::Rectangle, "method.rectangle"),
+            (SelectMethod::Polygon, "method.polygon"),
+            (SelectMethod::Lasso, "method.lasso"),
+        ] {
+            ui.selectable_value(&mut self.select_method, method, t(key));
+        }
+        if self.select_method != before {
+            self.stop();
+        }
+        if self.select_method != SelectMethod::Rectangle {
+            ui.separator();
+            ui.selectable_value(&mut self.select_whole, false, t("select.touched"));
+            ui.selectable_value(&mut self.select_whole, true, t("select.whole"));
+        }
+        ui.separator();
+        ui.label(t("select.modifiers"));
+    }
+
+    /// The area being drawn with the selection tool, closed, up to the
+    /// pointer `p`, and whether it takes only the elements wholly inside.
+    fn select_area(&self, p: Option<Point>) -> Option<(Vec<Point>, bool)> {
+        if self.tool != Tool::Select {
+            return None;
+        }
+        match (self.select_method, &self.dragging) {
+            // Left to right takes the elements wholly inside.
+            (SelectMethod::Rectangle, Some(points)) => {
+                let (&a, &b) = (points.first()?, points.last()?);
+                let corners = vec![a, Point::new(a.x, b.y), b, Point::new(b.x, a.y)];
+                Some((corners, b.x >= a.x))
+            }
+            (SelectMethod::Lasso, Some(points)) => Some((points.clone(), self.select_whole)),
+            (SelectMethod::Polygon, _) if !self.slab_points.is_empty() => {
+                let mut points = self.slab_points.clone();
+                points.extend(p);
+                Some((points, self.select_whole))
+            }
+            _ => None,
+        }
+    }
+
+    /// Selects with the area, as `how` says.
+    fn select_with(
+        &mut self,
+        project: &Project,
+        plan: &[LayerPlan],
+        area: Option<(Vec<Point>, bool)>,
+        how: Combine,
+    ) {
+        if let Some((area, whole)) = area {
+            let caught = caught_in(project, plan, &area, whole, self.show_guides);
+            how.apply(&mut self.selection, &caught);
+        }
+    }
+
+    /// The selection tool in the plan: a click picks the element under the
+    /// pointer, or a corner of the polygon; a drag draws
+    /// a rectangle or a lasso, which selects when let go.
+    fn select_gesture(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        project: &Project,
+        plan: &[LayerPlan],
+        snap: f64,
+    ) {
+        let how = Combine::from(ui.input(|i| i.modifiers));
+        let p = response.hover_pos().map(|p| self.view.model(p));
+        if response.clicked()
+            && let Some(p) = response.interact_pointer_pos().map(|p| self.view.model(p))
+        {
+            if self.select_method != SelectMethod::Polygon {
+                let caught: Vec<Id> = hit(project, plan, p, snap, self.show_guides)
+                    .into_iter()
+                    .collect();
+                how.apply(&mut self.selection, &caught);
+            } else if self.slab_points.len() >= 3
+                && self
+                    .slab_points
+                    .first()
+                    .is_some_and(|q| distance(*q, p) <= snap)
+            {
+                let area = self.select_area(None);
+                self.slab_points.clear();
+                self.select_with(project, plan, area, how);
+            } else {
+                self.slab_points.push(p);
+            }
+        }
+        if self.select_method == SelectMethod::Polygon {
+            return;
+        }
+        // ponytail: a drag draws an area wherever it starts, even on an
+        // element: the terrain or a slab lies under most of a plan, so
+        // "from empty space" would rarely happen. Once selected elements
+        // move by dragging, a drag that starts on one moves it instead.
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        {
+            self.dragging = Some(vec![self.view.model(origin)]);
+        }
+        let lasso = self.select_method == SelectMethod::Lasso;
+        if let (Some(points), Some(p)) = (&mut self.dragging, p) {
+            match points.last() {
+                // ponytail: a lasso point every half snap distance keeps
+                // the fill and the catch quick; finer if lassos look jagged.
+                Some(&q) if lasso && distance(q, p) < snap / 2.0 => {}
+                Some(_) if !lasso && points.len() > 1 => {
+                    let last = points.len() - 1;
+                    points[last] = p;
+                }
+                _ => points.push(p),
+            }
+        }
+        if response.drag_stopped() {
+            let area = self.select_area(None);
+            self.dragging = None;
+            self.select_with(project, plan, area, how);
+        }
     }
 
     /// B or its button: the next click picks the reference point, or, if
@@ -967,7 +1136,9 @@ impl Workspace {
             ),
             _ => None,
         };
-        if response.clicked() {
+        if self.tool == Tool::Select {
+            self.select_gesture(ui, &response, history.project(), plan, snap);
+        } else if response.clicked() {
             if let Some(outline) = contour.clone() {
                 changed |= match self.tool {
                     Tool::Wall => self.wall.outline(history, outline),
@@ -982,11 +1153,20 @@ impl Workspace {
             }
         }
 
-        self.view
-            .paint(&painter, history.project(), plan, self.selection);
+        // While an area is drawn, the plan shows what letting go selects.
+        let area = self.select_area(response.hover_pos().map(|p| self.view.model(p)));
+        let mut shown = self.selection.clone();
+        if let Some((points, whole)) = &area {
+            let caught = caught_in(history.project(), plan, points, *whole, self.show_guides);
+            Combine::from(ui.input(|i| i.modifiers)).apply(&mut shown, &caught);
+        }
+        self.view.paint(&painter, history.project(), plan, &shown);
+        if let Some((points, whole)) = &area {
+            self.view.area(&painter, points, *whole);
+        }
         if self.show_guides {
             for g in &history.project().guides {
-                let stroke = if self.selection == Some(g.id) {
+                let stroke = if shown.contains(&g.id) {
                     egui::Stroke::new(2.0, plan::SELECTED)
                 } else {
                     egui::Stroke::new(1.0, plan::PLACED)
@@ -1015,10 +1195,15 @@ impl Workspace {
             }
             _ => None,
         };
+        // The selection polygon is drawn as an area, above.
+        let outline: &[Point] = match self.tool {
+            Tool::Select => &[],
+            _ => &self.slab_points,
+        };
         self.view.preview(
             &painter,
             &self.wall,
-            &self.slab_points,
+            outline,
             self.beam_start,
             rectangle_from,
             cursor,
@@ -1079,10 +1264,8 @@ impl Workspace {
 
     fn click(&mut self, history: &mut History, plan: &[LayerPlan], p: Point, snap: f64) -> bool {
         match self.tool {
-            Tool::Select => {
-                self.selection = hit(history.project(), plan, p, snap, self.show_guides);
-                false
-            }
+            // Its clicks go to `select_gesture`.
+            Tool::Select => false,
             Tool::Guide => {
                 if let Some(shape) = self.guide_at(p) {
                     self.slab_points.clear();
@@ -1328,11 +1511,16 @@ impl Workspace {
                     }
                 }
                 egui::Event::Key {
-                    key, pressed: true, ..
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
                 } => match key {
                     Key::Backspace => self.typed.erase(),
                     // Escape first forgets what was typed, then the halfway
-                    // or reference point being picked, then stops drawing.
+                    // or reference point being picked, then stops drawing,
+                    // then goes back to the selection tool, then empties
+                    // the selection.
                     Key::Escape if !self.typed.is_empty() => self.typed.clear(),
                     Key::Escape if self.halfway.is_some() || self.reference.is_some() => {
                         self.halfway = None;
@@ -1340,9 +1528,14 @@ impl Workspace {
                     }
                     // A parallel guide: back to picking its edge.
                     Key::Escape if self.guide_edge.is_some() => self.guide_edge = None,
-                    Key::Escape => {
-                        self.stop();
-                        self.selection = None;
+                    Key::Escape if self.pending() => self.stop(),
+                    Key::Escape if self.tool != Tool::Select => self.set_tool(Tool::Select),
+                    Key::Escape => self.selection.clear(),
+                    // Enter closes the selection polygon.
+                    Key::Enter if self.tool == Tool::Select && self.slab_points.len() >= 3 => {
+                        let area = self.select_area(None);
+                        self.slab_points.clear();
+                        self.select_with(history.project(), plan, area, Combine::from(modifiers));
                     }
                     // With something typed, Enter places that point.
                     Key::Enter

@@ -20,19 +20,19 @@ pub struct ModelView {
     camera: Camera,
     scene: Arc<Scene>,
     /// The selection the scene was coloured for.
-    coloured_for: Option<Id>,
+    coloured_for: Vec<Id>,
 }
 
 impl ModelView {
     /// Rebuilds the triangles from the model, the selection highlighted.
-    pub fn rebuild(&mut self, project: &Project, selection: Option<Id>) {
+    pub fn rebuild(&mut self, project: &Project, selection: &[Id]) {
         // ponytail: a model that fails to compute shows nothing; show the
         // error once the interface has a message area for it.
         let blocks = model_blocks(project, Phase::Proposed).unwrap_or_default();
         let coloured: Vec<_> = blocks
             .iter()
             .map(|p| {
-                let color = if selection == Some(p.element) {
+                let color = if selection.contains(&p.element) {
                     SELECTED
                 } else if project.meshes.iter().any(|m| m.id == p.element) {
                     TERRAIN
@@ -46,7 +46,7 @@ impl ModelView {
             })
             .collect();
         self.scene = Arc::new(Scene::new(self.scene.generation + 1, &coloured));
-        self.coloured_for = selection;
+        self.coloured_for = selection.to_vec();
         if self.camera.distance <= 0.0 {
             self.camera.fit(&self.scene);
         }
@@ -63,7 +63,7 @@ impl ModelView {
     }
 
     /// Whether the scene was coloured for another selection.
-    pub fn stale(&self, selection: Option<Id>) -> bool {
+    pub fn stale(&self, selection: &[Id]) -> bool {
         self.scene.generation == 0 || self.coloured_for != selection
     }
 
