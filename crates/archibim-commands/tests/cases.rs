@@ -1083,6 +1083,81 @@ fn walls_reference_line() -> Result {
 }
 
 #[test]
+fn walls_reference_choice_and_side() -> Result {
+    let mut f = Fixture::new()?;
+    let render = f.material("render", 1)?;
+    let insulation = f.material("insulation", 3)?;
+    let concrete = f.material("concrete", 9)?;
+    let plaster = f.material("plaster", 1)?;
+
+    // The centre of the load-bearing layers: the middle of the concrete,
+    // 260 from the exterior face (to the left, y > 0).
+    let a = f.wall_with(
+        (0.0, 0.0),
+        (5000.0, 0.0),
+        vec![
+            layer_of(LayerRole::Finish, render, 20.0),
+            layer_of(LayerRole::Insulation, insulation, 140.0),
+            layer_of(LayerRole::LoadBearing, concrete, 200.0),
+            layer_of(LayerRole::Lining, plaster, 15.0),
+        ],
+    )?;
+    let mut wall = f.h.project().wall(a)?.clone();
+    wall.reference = WallReference::LoadBearingAxis;
+    f.h.run(Command::ReplaceWall(wall.clone()))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(hi, 260.0) && close(lo, -115.0), "{lo} {hi}");
+    // A thicker render never moves the line.
+    let mut thicker = wall.clone();
+    thicker.layers[0].thickness = 40.0;
+    f.h.run(Command::ReplaceWall(thicker))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(hi, 280.0) && close(lo, -115.0), "{lo} {hi}");
+    // Without load-bearing layers, back on the centre of the wall.
+    let mut lined = wall.clone();
+    for layer in &mut lined.layers {
+        layer.role = LayerRole::Lining;
+    }
+    f.h.run(Command::ReplaceWall(lined))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(hi, 187.5) && close(lo, -187.5), "{lo} {hi}");
+    // Swapping the side keeps the line and mirrors the build-up about it,
+    // in one undo step.
+    f.h.run(Command::ReplaceWall(wall.reversed()))?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(hi, 115.0) && close(lo, -260.0), "{lo} {hi}");
+    f.h.undo()?;
+    let (lo, hi) = y_range(&f.plan()?, a);
+    assert!(close(hi, 187.5) && close(lo, -187.5), "undone: {lo} {hi}");
+    for _ in 0..4 {
+        f.h.undo()?;
+    }
+
+    // A chain drawn anticlockwise with the side swapped: the exterior face
+    // is outside and the corners close.
+    let corners = [(0.0, 0.0), (4000.0, 0.0), (4000.0, 4000.0), (0.0, 4000.0)];
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = f.wall(corners[i], corners[(i + 1) % 4], &[(concrete, 200.0)])?;
+        let wall = f.h.project().wall(id)?.reversed();
+        f.h.run(Command::ReplaceWall(wall))?;
+        ids.push(id);
+    }
+    let plan = f.plan()?;
+    let (lo, hi) = y_range(&plan, ids[0]);
+    // The exterior face on the clicked line, facing out; the wall inside.
+    assert!(close(lo, 0.0) && close(hi, 200.0), "outside: {lo} {hi}");
+    for i in 0..4 {
+        assert_eq!(
+            shared_vertices(&layer(&plan, ids[i], 0), &layer(&plan, ids[(i + 1) % 4], 0)),
+            2,
+            "corner {i} closes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn structure_placed_point() -> Result {
     let mut f = Fixture::new()?;
     let concrete = f.material("concrete", 9)?;

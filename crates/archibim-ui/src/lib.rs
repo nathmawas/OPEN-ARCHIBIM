@@ -596,40 +596,58 @@ impl Workspace {
 
     /// The drawing aids, in a row: what the pointer snaps to, and the
     /// points placed from others.
+    // ponytail: short words, the full one on hover; icons drawn to the
+    // catalogue rules (ADR 0004) replace them later.
     fn aids(&mut self, ui: &mut Ui) {
+        let gap = || egui::Separator::default().spacing(4.0);
+        ui.spacing_mut().item_spacing.x = 3.0;
         ui.strong(t("snap.title"));
         let o = &mut self.snap_options;
-        for (on, key) in [
-            (&mut o.points, "snap.points"),
-            (&mut o.midpoints, "snap.midpoints"),
-            (&mut o.intersections, "snap.intersections"),
-            (&mut o.edges, "snap.edges"),
-            (&mut o.angles, "snap.angles"),
-            (&mut o.alignments, "snap.alignments"),
-            (&mut o.guides, "snap.guides"),
+        for (on, short, key) in [
+            (&mut o.points, "snap.points_short", "snap.points"),
+            (&mut o.midpoints, "snap.midpoints_short", "snap.midpoints"),
+            (
+                &mut o.intersections,
+                "snap.intersections_short",
+                "snap.intersections",
+            ),
+            (&mut o.edges, "snap.edges_short", "snap.edges"),
+            (&mut o.angles, "snap.angles_short", "snap.angles"),
+            (
+                &mut o.alignments,
+                "snap.alignments_short",
+                "snap.alignments",
+            ),
+            (&mut o.guides, "snap.guides_short", "snap.guides"),
         ] {
-            ui.checkbox(on, t(key));
+            ui.toggle_value(on, t(short)).on_hover_text(t(key));
         }
-        ui.separator();
-        ui.label(t("snap.step")).on_hover_text(t("snap.step_hint"));
+        ui.add(gap());
         for (on, angle) in o.base_angles.iter_mut().zip(BASE_ANGLES) {
-            ui.toggle_value(on, format!("{angle}°"));
+            ui.toggle_value(on, format!("{angle}°"))
+                .on_hover_text(t("snap.step_hint"));
         }
-        ui.label(t("snap.other"));
         ui.add(
             egui::DragValue::new(&mut o.other_angle)
                 .range(0..=180)
+                .prefix(format!("{} ", t("snap.other_short")))
                 .suffix("°"),
-        );
-        ui.separator();
-        ui.label(t("snap.divisions"));
-        ui.add(egui::DragValue::new(&mut o.divisions).range(2..=12));
+        )
+        .on_hover_text(t("snap.other"));
+        ui.add(gap());
+        ui.add(
+            egui::DragValue::new(&mut o.divisions)
+                .range(2..=12)
+                .prefix(format!("{} ", t("snap.divisions_short"))),
+        )
+        .on_hover_text(t("snap.divisions"));
         if self.tool != Tool::Select {
-            ui.separator();
+            ui.add(gap());
         }
         if self.tool != Tool::Select
             && ui
-                .selectable_label(self.halfway.is_some(), t("snap.halfway"))
+                .selectable_label(self.halfway.is_some(), t("snap.halfway_short"))
+                .on_hover_text(t("snap.halfway"))
                 .clicked()
         {
             self.halfway = match self.halfway {
@@ -639,7 +657,8 @@ impl Workspace {
         }
         if self.tool != Tool::Select
             && ui
-                .selectable_label(self.reference.is_some(), t("snap.reference"))
+                .selectable_label(self.reference.is_some(), t("snap.reference_short"))
+                .on_hover_text(t("snap.reference"))
                 .clicked()
         {
             self.ask_reference();
@@ -752,7 +771,8 @@ impl Workspace {
                 Element::Opening(self.templates.window.clone())
             }
         };
-        fields(ui, &mut element, project);
+        // Before drawing, the side swap stays on for the next walls.
+        fields(ui, &mut element, project, &mut self.wall.swapped);
         // Settings are not part of the model: they change at once, with no
         // command and no undo.
         match element {

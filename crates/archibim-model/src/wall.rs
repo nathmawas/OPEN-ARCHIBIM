@@ -86,6 +86,8 @@ pub enum WallReference {
     RightFace,
     /// The left face of the load-bearing layers.
     LoadBearingLeft,
+    /// The middle of the load-bearing layers, from the first to the last.
+    LoadBearingAxis,
     /// The right face of the load-bearing layers.
     LoadBearingRight,
 }
@@ -130,7 +132,7 @@ impl Wall {
 
     /// How far the left face lies to the left of `start` and `end`.
     /// Without load-bearing layers, a load-bearing reference falls back on
-    /// the face on its side.
+    /// the face on its side, or on the middle of the wall.
     pub fn left_face_shift(&self) -> f64 {
         self.reference_shift() - self.offset
     }
@@ -148,11 +150,30 @@ impl Wall {
                 .iter()
                 .position(|l| bearing(&l))
                 .map_or(0.0, before),
+            WallReference::LoadBearingAxis => match (
+                self.layers.iter().position(|l| bearing(&l)),
+                self.layers.iter().rposition(|l| bearing(&l)),
+            ) {
+                (Some(first), Some(last)) => (before(first) + before(last + 1)) / 2.0,
+                _ => self.thickness() / 2.0,
+            },
             WallReference::LoadBearingRight => self
                 .layers
                 .iter()
                 .rposition(|l| bearing(&l))
                 .map_or(self.thickness(), |i| before(i + 1)),
+        }
+    }
+
+    /// The same wall seen from its other end: the reference line stays
+    /// where it is and the build-up lies on its other side.
+    pub fn reversed(&self) -> Self {
+        Self {
+            start: self.end,
+            end: self.start,
+            offset: -self.offset,
+            sweep: -self.sweep,
+            ..self.clone()
         }
     }
 

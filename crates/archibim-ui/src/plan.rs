@@ -4,7 +4,7 @@ use archibim_geometry::{
     LayerPlan, beam_outline, column_outline, mesh_contours, opening_outline, roof_faces,
     stair_steps, triangulate, visible_edges,
 };
-use archibim_model::{GuideShape, Id, LayerRole, Point, Project, Stair, Wall};
+use archibim_model::{GuideShape, Id, LayerRole, Point, Project, Stair};
 use egui::{Color32, Key, Mesh, Painter, Pos2, Rect, Response, Shape, Stroke, Ui, Vec2};
 
 use crate::{Snap, SnapKind, WallTool};
@@ -479,12 +479,9 @@ impl PlanView {
         if let Some(start) = wall.start() {
             let end = p;
             painter.line_segment([self.screen(start), self.screen(end)], line);
-            // The faces, placed from the clicked reference line.
-            let ghost = Wall {
-                start,
-                end,
-                ..wall.template.clone()
-            };
+            // The faces, placed from the clicked reference line, on the
+            // side the wall will be built.
+            let ghost = wall.ghost(start, end, 0.0);
             if let Some((a, b)) = ghost.left_face() {
                 let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
                 let k = ghost.thickness() / l;
