@@ -31,6 +31,8 @@ struct Shot {
     rest: Option<Point>,
     /// Keys typed after the pointer is in place.
     typed: &'static str,
+    /// The pointer dragged from one point to another, let go or still held.
+    drag: Option<(Point, Point, bool)>,
 }
 
 impl Shot {
@@ -44,6 +46,7 @@ impl Shot {
             hover: None,
             rest: None,
             typed: "",
+            drag: None,
         }
     }
 }
@@ -125,6 +128,30 @@ impl Capture {
                 tool: Tool::Slab,
                 ..Shot::new("10-slab-tool", None, Layout::Plan)
             },
+            // The wall tool: the reference line list and the side swap.
+            Shot {
+                tool: Tool::Wall,
+                ..Shot::new("11-wall-tool", None, Layout::Plan)
+            },
+            // Right to left across the east of the house, let go: what it
+            // touched is selected.
+            Shot {
+                drag: Some((
+                    Point::new(11000.0, -3000.0),
+                    Point::new(6000.0, -5500.0),
+                    true,
+                )),
+                ..Shot::new("12-touched-selection", None, Layout::Plan)
+            },
+            // The same area still held: dashed, with what it will catch.
+            Shot {
+                drag: Some((
+                    Point::new(11000.0, -3000.0),
+                    Point::new(6000.0, -5500.0),
+                    false,
+                )),
+                ..Shot::new("13-touched-area", None, Layout::Plan)
+            },
         ];
         Self {
             dir,
@@ -185,6 +212,19 @@ impl Capture {
             if let Some(p) = shot.hover {
                 self.script
                     .push_back(vec![Event::PointerMoved(workspace.screen_of(p))]);
+            }
+            if let Some((a, b, release)) = shot.drag {
+                let (from, to) = (workspace.screen_of(a), workspace.screen_of(b));
+                self.script
+                    .push_back(vec![Event::PointerMoved(from), button(from, true)]);
+                // A few steps, so the drag is seen as one.
+                for i in 1..=8 {
+                    let pos = from + (to - from) * (i as f32 / 8.0);
+                    self.script.push_back(vec![Event::PointerMoved(pos)]);
+                }
+                if release {
+                    self.script.push_back(vec![button(to, false)]);
+                }
             }
             if !shot.typed.is_empty() {
                 self.script

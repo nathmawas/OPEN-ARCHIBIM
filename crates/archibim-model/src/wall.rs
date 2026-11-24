@@ -210,3 +210,79 @@ impl Wall {
         Some((shift(self.start), shift(self.end)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wall(roles: &[(LayerRole, f64)], reference: WallReference) -> Wall {
+        let level = LevelRef {
+            story: Id(1),
+            kind: crate::LevelKind::Finished,
+            offset: 0.0,
+        };
+        Wall {
+            id: Id(2),
+            story: Id(1),
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1000.0, 0.0),
+            reference,
+            offset: 30.0,
+            sweep: 0.0,
+            layers: roles
+                .iter()
+                .map(|&(role, thickness)| Layer {
+                    role,
+                    material: Id(3),
+                    thickness,
+                    status: crate::RenovationStatus::New,
+                    framing: None,
+                })
+                .collect(),
+            bottom: level,
+            top: level,
+        }
+    }
+
+    #[test]
+    fn the_bearing_axis_is_the_middle_of_the_bearing_layers() {
+        use LayerRole::*;
+        let one = wall(&[(LoadBearing, 200.0)], WallReference::LoadBearingAxis);
+        assert_eq!(one.reference_shift(), 100.0, "one layer");
+        let two = wall(
+            &[
+                (Finish, 20.0),
+                (LoadBearing, 100.0),
+                (Insulation, 50.0),
+                (LoadBearing, 100.0),
+            ],
+            WallReference::LoadBearingAxis,
+        );
+        // From 20 to 270: the middle is 145, whatever lies between.
+        assert_eq!(two.reference_shift(), 145.0);
+        let none = wall(
+            &[(Finish, 20.0), (Lining, 10.0)],
+            WallReference::LoadBearingAxis,
+        );
+        assert_eq!(none.reference_shift(), 15.0, "falls back on the middle");
+        let empty = wall(&[], WallReference::LoadBearingAxis);
+        assert_eq!(empty.reference_shift(), 0.0);
+    }
+
+    #[test]
+    fn reversing_twice_gives_the_wall_back_and_keeps_the_circle() {
+        let mut w = wall(&[(LayerRole::LoadBearing, 200.0)], WallReference::Axis);
+        w.sweep = 1.0;
+        let r = w.reversed();
+        assert_eq!(
+            (r.start, r.end, r.offset, r.sweep),
+            (w.end, w.start, -30.0, -1.0)
+        );
+        assert_eq!(r.reversed(), w);
+        let (Some((c, rad)), Some((c2, rad2))) = (w.arc(), r.arc()) else {
+            panic!("both are curved");
+        };
+        assert!((c.x - c2.x).abs() < 1e-6 && (c.y - c2.y).abs() < 1e-6);
+        assert!((rad - rad2).abs() < 1e-6);
+    }
+}

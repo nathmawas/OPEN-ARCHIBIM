@@ -385,4 +385,131 @@ mod tests {
             "parallel"
         );
     }
+
+    #[test]
+    fn a_degenerate_or_empty_area_catches_nothing() {
+        let project = Project::new();
+        let line = [pt(0.0, 0.0), pt(100.0, 0.0)];
+        assert!(caught_in(&project, &[], &line, false, true).is_empty());
+        assert!(caught_in(&project, &[], &[], true, true).is_empty());
+        // A zero-size area on a filled outline still touches it; the
+        // area tool decides whether a click is a drag.
+        let slab = Drawn::Filled(vec![square(0.0, 0.0, 100.0)]);
+        let dot = [pt(50.0, 50.0); 4];
+        assert!(!caught(&slab, &dot, true));
+        assert!(!caught(
+            &Drawn::Filled(Vec::new()),
+            &square(0.0, 0.0, 9.0),
+            true
+        ));
+    }
+
+    #[test]
+    fn an_area_touching_only_a_corner_touches_but_holds_nothing_whole() {
+        let corner = Drawn::Filled(vec![square(100.0, 100.0, 50.0)]);
+        let area = square(0.0, 0.0, 100.0);
+        assert!(caught(&corner, &area, false));
+        assert!(!caught(&corner, &area, true));
+    }
+
+    #[test]
+    fn a_curved_wall_piece_is_judged_by_its_outline() {
+        // A quarter ring polygon around the origin, radii 90 and 110.
+        let n = 8;
+        let arc = |r: f64, i: usize| {
+            let a = std::f64::consts::FRAC_PI_2 * i as f64 / n as f64;
+            pt(r * a.cos(), r * a.sin())
+        };
+        let mut ring: Vec<Point> = (0..=n).map(|i| arc(110.0, i)).collect();
+        ring.extend((0..=n).rev().map(|i| arc(90.0, i)));
+        let wall = Drawn::Filled(vec![ring]);
+        // The hollow of the arc holds none of the wall, an area on the
+        // chord side crossing it does.
+        assert!(!caught(&wall, &square(0.0, 0.0, 50.0), false));
+        assert!(caught(&wall, &square(60.0, 60.0, 50.0), false));
+        assert!(!caught(&wall, &square(60.0, 60.0, 50.0), true));
+        assert!(caught(&wall, &square(-10.0, -10.0, 200.0), true));
+    }
+
+    #[test]
+    fn removal_takes_a_wall_and_its_own_opening_once_and_undoes_at_once() {
+        use archibim_commands::History;
+        use archibim_model::{
+            Layer, LayerRole, LevelKind, LevelRef, Material, MaterialFamily, NominalSize, Opening,
+            OpeningKind, Operation, Part, RenovationStatus, Story, Wall, WallReference,
+        };
+        type Res = Result<(), Box<dyn std::error::Error>>;
+        fn run() -> Res {
+            let mut h = History::new(Project::new());
+            let (story, material, wall, opening) = (h.new_id(), h.new_id(), h.new_id(), h.new_id());
+            h.run(Command::AddStory(Story {
+                id: story,
+                name: String::new(),
+                finished_level: 0.0,
+                floor_build_up: 0.0,
+            }))?;
+            h.run(Command::AddMaterial(Material {
+                id: material,
+                name: String::new(),
+                family: MaterialFamily::Other,
+                priority: 5,
+            }))?;
+            let level = |offset| LevelRef {
+                story,
+                kind: LevelKind::Finished,
+                offset,
+            };
+            h.run(Command::AddWall(Wall {
+                id: wall,
+                story,
+                start: Point::new(0.0, 0.0),
+                end: Point::new(5000.0, 0.0),
+                reference: WallReference::LeftFace,
+                offset: 0.0,
+                sweep: 0.0,
+                layers: vec![Layer {
+                    role: LayerRole::LoadBearing,
+                    material,
+                    thickness: 200.0,
+                    status: RenovationStatus::New,
+                    framing: None,
+                }],
+                bottom: level(0.0),
+                top: level(2500.0),
+            }))?;
+            h.run(Command::AddOpening(Opening {
+                id: opening,
+                wall,
+                kind: OpeningKind::Interior,
+                position: 1000.0,
+                sill: 0.0,
+                height: 2000.0,
+                frame: 50.0,
+                parts: vec![Part {
+                    width: 800.0,
+                    operation: Operation::Fixed,
+                }],
+                nominal: NominalSize::ClearOpening,
+            }))?;
+            assert!(removal(h.project(), &[]).is_none(), "nothing selected");
+            assert!(removal(h.project(), &[Id(999)]).is_none(), "unknown id");
+            // Both selected, twice over: each goes once, the window first.
+            let command = removal(h.project(), &[wall, opening, wall]).ok_or("no command")?;
+            h.run(command)?;
+            assert!(h.project().walls.is_empty() && h.project().openings.is_empty());
+            h.undo()?;
+            assert_eq!(h.project().walls.len(), 1, "one undo brings the wall");
+            assert_eq!(h.project().openings.len(), 1, "and its window");
+            h.redo()?;
+            assert!(h.project().walls.is_empty() && h.project().openings.is_empty());
+            // The window alone, selected with nothing else.
+            h.undo()?;
+            let command = removal(h.project(), &[opening]).ok_or("no command")?;
+            h.run(command)?;
+            assert_eq!(h.project().walls.len(), 1);
+            assert!(h.project().openings.is_empty());
+            Ok(())
+        }
+        assert!(run().is_ok());
+    }
 }

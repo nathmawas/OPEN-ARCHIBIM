@@ -348,6 +348,8 @@ impl Workspace {
                             changed |= self.run(history, command);
                         }
                     } else if self.selection.len() > 1 {
+                        // ponytail: a count and Delete only; editing a shared
+                        // parameter on all of them (TOOLS.md rule 3) comes next.
                         ui.heading(t("props.title"));
                         ui.label(format!("{} {}", self.selection.len(), t("select.count")));
                         if ui.button(t("action.delete")).clicked() {

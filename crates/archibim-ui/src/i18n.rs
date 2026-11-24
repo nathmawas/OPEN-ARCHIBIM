@@ -54,4 +54,49 @@ mod tests {
         b.sort();
         assert_eq!(a, b);
     }
+
+    fn keys(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, _)| k.trim())
+            .collect()
+    }
+
+    #[test]
+    fn no_pack_repeats_a_key() {
+        for text in [EN, FR] {
+            let mut k = keys(text);
+            let n = k.len();
+            k.sort();
+            k.dedup();
+            assert_eq!(k.len(), n, "a key is repeated");
+        }
+    }
+
+    #[test]
+    fn every_library_material_and_family_has_a_name_in_both_packs() {
+        let (en, fr) = (parse(EN), parse(FR));
+        let mut names: Vec<&str> = archibim_model::STARTING_LIBRARY
+            .iter()
+            .map(|m| m.0)
+            .collect();
+        names.extend([
+            "family.masonry",
+            "family.insulation",
+            "family.timber_frame",
+            "family.metal_frame",
+            "family.air",
+            "family.membrane",
+            "family.facade_finish",
+            "family.cladding",
+            "family.interior_lining",
+            "family.roof_covering",
+            "family.other",
+        ]);
+        for name in names {
+            assert!(en.get(name).is_some_and(|v| !v.is_empty()), "en {name}");
+            assert!(fr.get(name).is_some_and(|v| !v.is_empty()), "fr {name}");
+        }
+    }
 }

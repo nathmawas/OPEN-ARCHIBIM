@@ -111,6 +111,8 @@ impl MaterialFamily {
 /// The starting library: name (a language pack key), family and junction
 /// priority. One generic material per kind; its colour, bond, binder or
 /// species are parameters of it, never new materials.
+// ponytail: a fixed table in the code; replace with open library files
+// carried in the project (TOOLS.md section 2, rule 10).
 pub const STARTING_LIBRARY: [(&str, MaterialFamily, u8); 37] = {
     use MaterialFamily::*;
     [

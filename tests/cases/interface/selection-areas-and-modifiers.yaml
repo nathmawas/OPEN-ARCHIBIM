@@ -14,13 +14,14 @@ expect:
     the selection.
   - A click on an element selects it alone; a click on empty space empties
     the selection.
-  - Dragging from left to right, from empty space, draws a rectangle with a
+  - Dragging from left to right, wherever it starts, draws a rectangle with a
     solid outline and selects the elements lying wholly inside it.
     Dragging from right to left draws it dashed, in another tint, and
     selects every element it touches. Inside and touched are judged on
     the outline the element draws in plan (a wall's faces, not its
-    reference line), on the story shown; an area inside a slab's outline
-    touches the slab. Guides are caught only when shown.
+    reference line) - on the story shown for walls, on every story for
+    what the plan draws from all of them (slabs, roofs). An area inside a
+    slab's outline touches the slab. Guides are caught only when shown.
   - The selection tool also selects by polygon (points clicked, closed on
     the first point or with Enter) and by lasso (a free line dragged and
     closed on release); they take the whole elements or the touched ones,
