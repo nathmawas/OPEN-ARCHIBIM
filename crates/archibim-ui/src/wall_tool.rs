@@ -13,7 +13,7 @@ pub enum WallMethod {
     /// again closes the chain.
     Chain,
     /// Two opposite corners, four walls drawn clockwise, so that the left
-    /// face (the first layer) is outside.
+    /// face (the first layer) is outside, unless the side is swapped.
     Rectangle,
     /// One side from two clicks, then the depth: a rectangle at any angle.
     RotatedRectangle,
@@ -30,6 +30,9 @@ pub struct WallTool {
     pub template: Wall,
     /// How clicks make walls.
     pub method: WallMethod,
+    /// The walls are built on the other side of the clicked line, as if
+    /// flipped, until this is switched off.
+    pub swapped: bool,
     /// The points clicked in the current chain or rectangle.
     points: Vec<Point>,
     /// How far the pointer has turned around the centre of an arc, and
@@ -44,6 +47,7 @@ impl WallTool {
         Self {
             template,
             method: WallMethod::Chain,
+            swapped: false,
             points: Vec::new(),
             turn: 0.0,
             last_angle: None,
@@ -207,7 +211,8 @@ impl WallTool {
     }
 
     /// Walls all around a closed outline, in one undo step. They run
-    /// clockwise, so that the first layer is outside.
+    /// clockwise, so that the first layer is outside unless the side is
+    /// swapped.
     pub fn outline(&mut self, history: &mut History, mut corners: Vec<Point>) -> bool {
         self.stop();
         if signed_area(&corners) > 0.0 {
@@ -222,18 +227,25 @@ impl WallTool {
 
     fn curved(&self, history: &mut History, start: Point, end: Point, sweep: f64) -> Wall {
         Wall {
-            sweep,
-            ..self.wall(history, start, end)
+            id: history.new_id(),
+            ..self.ghost(start, end, sweep)
         }
     }
 
     fn wall(&self, history: &mut History, start: Point, end: Point) -> Wall {
-        Wall {
-            id: history.new_id(),
+        self.curved(history, start, end, self.template.sweep)
+    }
+
+    /// The wall the clicks from `start` to `end` make, on the side it will
+    /// be built, before it gets its own identifier: also the preview.
+    pub fn ghost(&self, start: Point, end: Point, sweep: f64) -> Wall {
+        let wall = Wall {
             start,
             end,
+            sweep,
             ..self.template.clone()
-        }
+        };
+        if self.swapped { wall.reversed() } else { wall }
     }
 }
 
@@ -480,6 +492,75 @@ mod tests {
         assert!((moved.position - 3100.0).abs() < 1e-6, "{}", moved.position);
         h.undo()?;
         assert_eq!(h.project().wall(wall.id)?.start, wall.start, "one undo");
+        Ok(())
+    }
+
+    #[test]
+    fn a_swapped_side_builds_on_the_other_side_of_the_clicks() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.swapped = true;
+        tool.method = WallMethod::Single;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        tool.click(&mut h, Point::new(3000.0, 0.0));
+        let w = &h.project().walls[0];
+        assert!(close(w.start, Point::new(3000.0, 0.0)) && close(w.end, Point::new(0.0, 0.0)));
+        let (face, _) = w.left_face().ok_or("no length")?;
+        assert!(close(face, Point::new(3000.0, 0.0)), "on the clicked line");
+        let ghost = tool.ghost(Point::new(0.0, 0.0), Point::new(3000.0, 0.0), 0.0);
+        assert_eq!(ghost.start, w.start, "the preview shows the built side");
+        assert!(tool.swapped, "stays on");
+        h.undo()?;
+
+        // A chain drawn anticlockwise keeps its exterior face outside and
+        // closes.
+        tool.method = WallMethod::Chain;
+        for (x, y) in [
+            (0.0, 0.0),
+            (4000.0, 0.0),
+            (4000.0, 3000.0),
+            (0.0, 3000.0),
+            (0.0, 0.0),
+        ] {
+            tool.click(&mut h, Point::new(x, y));
+        }
+        let walls = &h.project().walls;
+        assert_eq!(walls.len(), 4);
+        for i in 0..4 {
+            assert!(close(walls[i].start, walls[(i + 1) % 4].end), "corner {i}");
+        }
+        assert!(tool.start().is_none(), "closing stops the chain");
+        // The walls run clockwise, so the exterior face (the first layer,
+        // on their left) is outside.
+        let turn: f64 = walls
+            .iter()
+            .map(|w| w.start.x * w.end.y - w.end.x * w.start.y)
+            .sum();
+        assert!(turn < 0.0, "{turn}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_swapped_rectangle_has_its_exterior_inside() -> Result {
+        let (mut h, mut tool) = setup()?;
+        tool.swapped = true;
+        tool.method = WallMethod::Rectangle;
+        tool.template.reference = WallReference::Axis;
+        tool.click(&mut h, Point::new(0.0, 0.0));
+        assert!(tool.click(&mut h, Point::new(6000.0, 4000.0)));
+        let walls = &h.project().walls;
+        assert_eq!(walls.len(), 4);
+        for i in 0..4 {
+            assert!(close(walls[i].start, walls[(i + 1) % 4].end), "corner {i}");
+        }
+        let xs: Vec<f64> = walls
+            .iter()
+            .filter_map(Wall::left_face)
+            .flat_map(|(a, b)| [a.x, b.x])
+            .collect();
+        assert!(xs.iter().any(|x| (x - 100.0).abs() < 1e-6), "{xs:?}");
+        assert!(xs.iter().any(|x| (x - 5900.0).abs() < 1e-6), "{xs:?}");
+        h.undo()?;
+        assert!(h.project().walls.is_empty(), "one undo removes all four");
         Ok(())
     }
 

@@ -138,11 +138,13 @@ impl Properties {
             ui.label(t("props.none"));
             return None;
         };
-        let edit = fields(ui, draft, project);
+        // On a drawn wall, the side-swap button flips it at once.
+        let mut swap = false;
+        let edit = fields(ui, draft, project, &mut swap);
         self.editing = edit.active;
         ui.separator();
         if let Element::Wall(w) = draft
-            && ui.button(t("action.flip")).clicked()
+            && swap
         {
             self.editing = false;
             return Some(flip(project, w));
@@ -216,13 +218,7 @@ fn cuts(ui: &mut Ui, project: &Project, id: Id) -> Option<Command> {
 // a real door once openings are detailed.
 pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
     let length = ((wall.end.x - wall.start.x).powi(2) + (wall.end.y - wall.start.y).powi(2)).sqrt();
-    let mut commands = vec![Command::ReplaceWall(Wall {
-        start: wall.end,
-        end: wall.start,
-        // The line stays where it is, now seen from the other end.
-        offset: -wall.offset,
-        ..wall.clone()
-    })];
+    let mut commands = vec![Command::ReplaceWall(wall.reversed())];
     for o in project.openings.iter().filter(|o| o.wall == wall.id) {
         let mut parts = o.parts.clone();
         parts.reverse();
@@ -235,9 +231,24 @@ pub(crate) fn flip(project: &Project, wall: &Wall) -> Command {
     Command::Group(commands)
 }
 
+/// The reference lines of a wall, in the order of the list.
+const REFERENCES: [(WallReference, &str); 6] = [
+    (WallReference::LeftFace, "ref.left"),
+    (WallReference::Axis, "ref.axis"),
+    (WallReference::RightFace, "ref.right"),
+    (WallReference::LoadBearingLeft, "ref.bearing_left"),
+    (WallReference::LoadBearingAxis, "ref.bearing_axis"),
+    (WallReference::LoadBearingRight, "ref.bearing_right"),
+];
+
 /// Draws the parameters of `element`, edited in place, and tells what the
-/// widgets did.
-pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> Edit {
+/// widgets did. The side-swap button of a wall toggles `swap`.
+pub(crate) fn fields(
+    ui: &mut Ui,
+    element: &mut Element,
+    project: &Project,
+    swap: &mut bool,
+) -> Edit {
     let materials = &project.materials;
     let mut edit = Edit::default();
     let e = &mut edit;
@@ -249,16 +260,22 @@ pub(crate) fn fields(ui: &mut Ui, element: &mut Element, project: &Project) -> E
             number(ui, e, "p.top_offset", &mut w.top.offset, -1.0e6);
             ui.label(t("settings.reference"))
                 .on_hover_text(t("ref.side_hint"));
+            ui.horizontal(|ui| {
+                let chosen = REFERENCES
+                    .iter()
+                    .find(|(r, _)| *r == w.reference)
+                    .map_or("", |(_, key)| t(key));
+                egui::ComboBox::from_id_salt("wall_reference")
+                    .selected_text(chosen)
+                    .show_ui(ui, |ui| {
+                        for (reference, key) in REFERENCES {
+                            e.track(&ui.selectable_value(&mut w.reference, reference, t(key)));
+                        }
+                    });
+                ui.toggle_value(swap, t("ref.swap"))
+                    .on_hover_text(t("ref.side_hint"));
+            });
             number(ui, e, "p.ref_offset", &mut w.offset, -1.0e6);
-            for (reference, key) in [
-                (WallReference::LeftFace, "ref.left"),
-                (WallReference::Axis, "ref.axis"),
-                (WallReference::RightFace, "ref.right"),
-                (WallReference::LoadBearingLeft, "ref.bearing_left"),
-                (WallReference::LoadBearingRight, "ref.bearing_right"),
-            ] {
-                e.track(&ui.selectable_value(&mut w.reference, reference, t(key)));
-            }
         }
         Element::Slab(s) => {
             ui.label(t("el.slab"));
