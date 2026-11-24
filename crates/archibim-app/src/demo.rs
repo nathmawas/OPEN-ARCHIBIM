@@ -7,8 +7,8 @@ use archibim_commands::{Command, History};
 use archibim_model::{
     Align, Anchor, Beam, Column, Framing, Guide, GuideShape, Hand, Id, Layer, LayerRole, LevelKind,
     LevelRef, Material, Mesh, MeshPoint, NominalSize, Opening, OpeningKind, Operation, Part,
-    Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, Slab, Stair, Story,
-    Wall, WallReference,
+    Performance, Point, Project, RenovationStatus, Roof, RoofEdge, RoofPlane, STARTING_LIBRARY,
+    Slab, Stair, Story, Wall, WallReference,
 };
 use archibim_ui::{Preset, Templates};
 
@@ -33,28 +33,37 @@ pub fn house() -> Result<(History, Id, Templates)> {
     // ponytail: translated in the interface language; follow the project's
     // language and country once projects carry them, and write the
     // translated name to IFC.
-    let mut material = |name: &str, priority| -> Result<Id> {
+    let mut library = Vec::new();
+    for (name, family, priority) in STARTING_LIBRARY {
         let id = h.new_id();
         h.run(Command::AddMaterial(Material {
             id,
             name: name.to_owned(),
+            family,
             priority,
         }))?;
-        Ok(id)
+        library.push((name, id));
+    }
+    let material = |name: &str| -> Result<Id> {
+        library
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, id)| *id)
+            .ok_or_else(|| format!("{name}: not in the starting library").into())
     };
-    let render = material("mat.render", 1)?;
-    let insulation = material("mat.insulation", 3)?;
-    let concrete = material("mat.concrete", 9)?;
-    let plaster = material("mat.plaster", 1)?;
-    let brick = material("mat.brick", 5)?;
-    let fibre = material("mat.wood_fibre", 2)?;
-    let wool = material("mat.mineral_wool", 2)?;
-    let timber = material("mat.timber", 6)?;
-    let osb = material("mat.osb", 4)?;
-    let board = material("mat.plasterboard", 1)?;
-    let block = material("mat.concrete_block", 7)?;
-    let tiles = material("mat.tiles", 1)?;
-    let soil = material("mat.soil", 0)?;
+    let render = material("mat.render")?;
+    let insulation = material("mat.insulation")?;
+    let concrete = material("mat.concrete")?;
+    let plaster = material("mat.plaster")?;
+    let brick = material("mat.brick")?;
+    let fibre = material("mat.wood_fibre")?;
+    let wool = material("mat.mineral_wool")?;
+    let timber = material("mat.timber")?;
+    let osb = material("mat.osb")?;
+    let board = material("mat.plasterboard")?;
+    let block = material("mat.concrete_block")?;
+    let tiles = material("mat.tiles")?;
+    let soil = material("mat.soil")?;
 
     let layer = |role, material, thickness| Layer {
         role,

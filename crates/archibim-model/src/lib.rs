@@ -16,7 +16,9 @@ mod wall;
 pub use envelope::{Mesh, MeshPoint, Roof, RoofEdge, RoofPlane, Stair};
 pub use guide::{Guide, GuideShape};
 pub use opening::{Hand, NominalSize, Opening, OpeningKind, Operation, Part, Performance};
-pub use project::{Id, JunctionMode, Material, ModelError, Project};
+pub use project::{
+    Id, JunctionMode, Material, MaterialFamily, ModelError, Project, STARTING_LIBRARY,
+};
 pub use story::{LevelKind, LevelRef, Story};
 pub use structure::{Align, Anchor, Beam, Column, Slab};
 pub use wall::{Framing, Layer, LayerRole, Point, RenovationStatus, Wall, WallReference};
