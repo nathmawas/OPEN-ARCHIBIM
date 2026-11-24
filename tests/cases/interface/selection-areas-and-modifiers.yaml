@@ -1,0 +1,32 @@
+id: selection-areas-and-modifiers
+title: Escape goes back to selecting; areas select whole or touched elements; Shift adds, Ctrl removes, Alt inverts
+status: proposed
+given: |
+  The demonstration house in plan: outside walls, two partitions, a slab,
+  a roof, a stair. The architect may be drawing with any tool.
+when: |
+  The architect presses Escape, clicks elements, or drags an area with the
+  selection tool, with or without Shift, Ctrl or Alt held.
+expect:
+  - Escape first stops what is being drawn (typed value, points placed,
+    halfway or reference point), as before. When nothing is pending, it
+    goes back to the selection tool. With the selection tool, it empties
+    the selection.
+  - A click on an element selects it alone; a click on empty space empties
+    the selection.
+  - Dragging from left to right draws a rectangle with a solid outline and
+    selects the elements lying wholly inside it. Dragging from right to
+    left draws it dashed and selects every element it touches.
+  - The selection tool also selects by polygon (points clicked, closed on
+    the first point or with Enter) and by lasso (a free line dragged and
+    closed on release); they take the whole elements or the touched ones,
+    as chosen in the tool's settings.
+  - Shift adds what is clicked or caught to the selection, Ctrl takes it
+    out, Alt inverts it (what was selected is taken out, the rest added).
+    Example - one wall selected, Alt and a rectangle across it and its
+    neighbours selects the neighbours without it.
+  - With several elements selected, the properties show how many, and
+    Delete removes them all in one undo step.
+  - The model does not change; selecting is not undone.
+  - Not yet - selecting in 3D; moving what is selected by dragging it;
+    keeping the selection across views.
