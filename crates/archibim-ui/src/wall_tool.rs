@@ -326,6 +326,7 @@ mod tests {
         h.run(Command::AddMaterial(Material {
             id: material,
             name: String::new(),
+            family: archibim_model::MaterialFamily::Other,
             priority: 5,
         }))?;
         let level = |offset| LevelRef {

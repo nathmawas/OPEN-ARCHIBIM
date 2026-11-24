@@ -11,6 +11,7 @@ use archibim_model::{
 use egui::{DragValue, Response, Ui};
 
 use crate::i18n::{label, t};
+use archibim_model::MaterialFamily as Family;
 
 /// Any element the palette can show.
 #[derive(Clone, Debug, PartialEq)]
@@ -398,7 +399,7 @@ fn convex(outline: &[Point]) -> bool {
 /// inside it, its underside and material.
 fn mesh(ui: &mut Ui, e: &mut Edit, m: &mut Mesh, materials: &[Material]) {
     ui.label(t("el.mesh"));
-    material(ui, e, &mut m.material, materials);
+    material(ui, e, &mut m.material, materials, Family::Other);
     number(ui, e, "p.level_offset", &mut m.level.offset, -1.0e6);
     number(ui, e, "mesh.bottom", &mut m.bottom, -1.0e6);
     ui.label(t("mesh.points_hint"));
@@ -466,7 +467,7 @@ fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
     number(ui, e, "p.width", &mut s.width, 1.0);
     number(ui, e, "p.bottom_offset", &mut s.bottom.offset, -1.0e6);
     number(ui, e, "p.top_offset", &mut s.top.offset, -1.0e6);
-    material(ui, e, &mut s.material, &project.materials);
+    material(ui, e, &mut s.material, &project.materials, Family::Masonry);
     let (Ok(bottom), Ok(top)) = (project.level(&s.bottom), project.level(&s.top)) else {
         return;
     };
@@ -504,21 +505,41 @@ fn stair(ui: &mut Ui, e: &mut Edit, s: &mut Stair, project: &Project) {
     value(ui, "stair.blondel", steps.blondel(), Some(BLONDEL));
 }
 
-fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material]) {
+fn material(ui: &mut Ui, e: &mut Edit, id: &mut Id, materials: &[Material], first: Family) {
+    ui.horizontal(|ui| {
+        ui.label(t("p.material"));
+        material_list(ui, e, "element_material", id, materials, first);
+    });
+}
+
+/// A material list: the families as headings with their materials under
+/// them, `first` at the top. Any material can be picked.
+fn material_list(
+    ui: &mut Ui,
+    e: &mut Edit,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    id: &mut Id,
+    materials: &[Material],
+    first: Family,
+) {
     let name = materials
         .iter()
         .find(|m| m.id == *id)
         .map_or("?", |m| label(&m.name));
-    ui.horizontal(|ui| {
-        ui.label(t("p.material"));
-        egui::ComboBox::from_id_salt("element_material")
-            .selected_text(name)
-            .show_ui(ui, |ui| {
-                for m in materials {
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(name)
+        .show_ui(ui, |ui| {
+            for family in first.first_then_all() {
+                let mut of = materials.iter().filter(|m| m.family == family).peekable();
+                if of.peek().is_none() {
+                    continue;
+                }
+                ui.label(egui::RichText::new(t(family_key(family))).strong());
+                for m in of {
                     e.track(&ui.selectable_value(id, m.id, label(&m.name)));
                 }
-            });
-    });
+            }
+        });
 }
 
 /// The layers of a wall or a slab. One layer is a simple element, shown
@@ -546,19 +567,15 @@ fn build_up(
                         }
                     });
             }
-            let name = |id| {
-                materials
-                    .iter()
-                    .find(|m| m.id == id)
-                    .map_or("?", |m| label(&m.name))
-            };
-            egui::ComboBox::from_id_salt(("material", i))
-                .selected_text(name(layer.material))
-                .show_ui(ui, |ui| {
-                    for m in materials {
-                        e.track(&ui.selectable_value(&mut layer.material, m.id, label(&m.name)));
-                    }
-                });
+            let first = Family::of_role(layer.role);
+            material_list(
+                ui,
+                e,
+                ("material", i),
+                &mut layer.material,
+                materials,
+                first,
+            );
             let r = ui.add(
                 DragValue::new(&mut layer.thickness)
                     .speed(1.0)
@@ -820,6 +837,22 @@ fn role_key(role: LayerRole) -> &'static str {
         LayerRole::Lining => "role.lining",
         LayerRole::Finish => "role.finish",
         LayerRole::Covering => "role.covering",
+    }
+}
+
+fn family_key(family: Family) -> &'static str {
+    match family {
+        Family::Masonry => "family.masonry",
+        Family::Insulation => "family.insulation",
+        Family::TimberFrame => "family.timber_frame",
+        Family::MetalFrame => "family.metal_frame",
+        Family::Air => "family.air",
+        Family::Membrane => "family.membrane",
+        Family::FacadeFinish => "family.facade_finish",
+        Family::Cladding => "family.cladding",
+        Family::InteriorLining => "family.interior_lining",
+        Family::RoofCovering => "family.roof_covering",
+        Family::Other => "family.other",
     }
 }
 

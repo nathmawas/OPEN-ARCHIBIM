@@ -56,6 +56,7 @@ impl Fixture {
         self.h.run(Command::AddMaterial(Material {
             id,
             name: name.into(),
+            family: archibim_model::MaterialFamily::Other,
             priority,
         }))?;
         Ok(id)
@@ -2319,5 +2320,68 @@ fn slabs_floor_on_bearing_walls_edge_cases() -> Result {
     assert!(arm_tops.iter().all(|p| p.1 <= 2_600.0 + 1e-6));
     let notch_tops = pieces_of(f.h.project(), notch)?;
     assert!(notch_tops.iter().all(|p| near(p.1, 2_800.0)));
+    Ok(())
+}
+
+#[test]
+fn materials_by_family() -> Result {
+    use archibim_model::{MaterialFamily, STARTING_LIBRARY};
+    // Every family has a material in the starting library.
+    for family in MaterialFamily::ALL {
+        assert!(STARTING_LIBRARY.iter().any(|m| m.1 == family), "{family:?}");
+    }
+    let mut f = Fixture::new()?;
+    let mut library = Vec::new();
+    for (name, family, priority) in STARTING_LIBRARY {
+        let id = f.h.new_id();
+        f.h.run(Command::AddMaterial(Material {
+            id,
+            name: name.into(),
+            family,
+            priority,
+        }))?;
+        library.push((name, id));
+    }
+    // Any material on any layer: one wall per role, a layer of every
+    // material in it, all kept as given.
+    let roles = [
+        LayerRole::LoadBearing,
+        LayerRole::Insulation,
+        LayerRole::AirGap,
+        LayerRole::Membrane,
+        LayerRole::Lining,
+        LayerRole::Finish,
+        LayerRole::Covering,
+    ];
+    for (i, role) in roles.into_iter().enumerate() {
+        let layers: Vec<Layer> = library
+            .iter()
+            .map(|&(_, m)| layer_of(role, m, 10.0))
+            .collect();
+        let y = -5_000.0 * i as f64;
+        let wall = f.wall_with((0.0, y), (4_000.0, y), layers.clone())?;
+        assert_eq!(f.h.project().wall(wall)?.layers, layers, "{role:?}");
+    }
+    // An air gap takes an air material and keeps its thickness.
+    let id = |name: &str| {
+        library
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|&(_, id)| id)
+            .ok_or("not in the library")
+    };
+    let y = 10_000.0;
+    let wall = f.wall_with(
+        (0.0, y),
+        (4_000.0, y),
+        vec![
+            layer_of(LayerRole::Covering, id("mat.timber_cladding")?, 20.0),
+            layer_of(LayerRole::AirGap, id("mat.air_ventilated")?, 30.0),
+            layer_of(LayerRole::LoadBearing, id("mat.concrete")?, 200.0),
+        ],
+    )?;
+    assert_eq!(f.h.project().wall(wall)?.layers[1].thickness, 30.0);
+    let (lo, hi) = ys(&layer(&f.plan()?, wall, 1));
+    assert!(close(hi - lo, 30.0), "air gap drawn {}", hi - lo);
     Ok(())
 }

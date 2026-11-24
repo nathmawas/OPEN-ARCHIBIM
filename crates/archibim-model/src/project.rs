@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::{
-    Beam, Column, Guide, GuideShape, Layer, LevelKind, LevelRef, Mesh, Opening, Point, Roof, Slab,
-    Stair, Story, Wall,
+    Beam, Column, Guide, GuideShape, Layer, LayerRole, LevelKind, LevelRef, Mesh, Opening, Point,
+    Roof, Slab, Stair, Story, Wall,
 };
 
 /// Permanent identifier of anything in the project.
@@ -36,10 +36,123 @@ pub struct Material {
     pub id: Id,
     /// Name shown to the user.
     pub name: String,
+    /// What the material is, to sort the lists; never a constraint on the
+    /// layers it goes into.
+    pub family: MaterialFamily,
     /// Junction priority: at a junction, a layer passes through the layers of
     /// lower priority.
     pub priority: u8,
 }
+
+/// What a material is. Families only sort the material lists: any material
+/// goes on any layer. A layer's role says what the layer does, the family
+/// what its material is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MaterialFamily {
+    /// Masonry and concrete.
+    Masonry,
+    /// Thermal or acoustic insulation.
+    Insulation,
+    /// Timber frames and roof framing.
+    TimberFrame,
+    /// Metal frames.
+    MetalFrame,
+    /// Air, ventilated or still.
+    Air,
+    /// Vapour barriers, breather membranes, waterproofing.
+    Membrane,
+    /// Facade finishes: render, paint.
+    FacadeFinish,
+    /// Cladding.
+    Cladding,
+    /// Interior linings.
+    InteriorLining,
+    /// Roof coverings.
+    RoofCovering,
+    /// Anything else.
+    Other,
+}
+
+impl MaterialFamily {
+    /// Every family, in the order of the lists.
+    pub const ALL: [Self; 11] = [
+        Self::Masonry,
+        Self::Insulation,
+        Self::TimberFrame,
+        Self::MetalFrame,
+        Self::Air,
+        Self::Membrane,
+        Self::FacadeFinish,
+        Self::Cladding,
+        Self::InteriorLining,
+        Self::RoofCovering,
+        Self::Other,
+    ];
+
+    /// The family a layer of this role is usually made of.
+    pub fn of_role(role: LayerRole) -> Self {
+        match role {
+            LayerRole::LoadBearing => Self::Masonry,
+            LayerRole::Insulation => Self::Insulation,
+            LayerRole::AirGap => Self::Air,
+            LayerRole::Membrane => Self::Membrane,
+            LayerRole::Lining => Self::InteriorLining,
+            LayerRole::Finish => Self::FacadeFinish,
+            LayerRole::Covering => Self::RoofCovering,
+        }
+    }
+
+    /// Every family, this one first, the others in their usual order.
+    pub fn first_then_all(self) -> impl Iterator<Item = Self> {
+        std::iter::once(self).chain(Self::ALL.into_iter().filter(move |f| *f != self))
+    }
+}
+
+/// The starting library: name (a language pack key), family and junction
+/// priority. One generic material per kind; its colour, bond, binder or
+/// species are parameters of it, never new materials.
+pub const STARTING_LIBRARY: [(&str, MaterialFamily, u8); 37] = {
+    use MaterialFamily::*;
+    [
+        ("mat.render", FacadeFinish, 1),
+        ("mat.insulation", Insulation, 3),
+        ("mat.concrete", Masonry, 9),
+        ("mat.plaster", InteriorLining, 1),
+        ("mat.brick", Masonry, 5),
+        ("mat.wood_fibre", Insulation, 2),
+        ("mat.mineral_wool", Insulation, 2),
+        ("mat.timber", TimberFrame, 6),
+        ("mat.osb", InteriorLining, 4),
+        ("mat.plasterboard", InteriorLining, 1),
+        ("mat.concrete_block", Masonry, 7),
+        ("mat.tiles", RoofCovering, 1),
+        ("mat.soil", Other, 0),
+        ("mat.cellular_concrete", Masonry, 5),
+        ("mat.stone", Masonry, 7),
+        ("mat.rammed_earth", Masonry, 6),
+        ("mat.hemp_lime", Masonry, 5),
+        ("mat.polyurethane", Insulation, 3),
+        ("mat.cellulose", Insulation, 3),
+        ("mat.cork", Insulation, 3),
+        ("mat.straw", Insulation, 3),
+        ("mat.glulam", TimberFrame, 6),
+        ("mat.steel", MetalFrame, 8),
+        ("mat.aluminium", MetalFrame, 8),
+        ("mat.air_ventilated", Air, 2),
+        ("mat.air_still", Air, 2),
+        ("mat.vapour_barrier", Membrane, 2),
+        ("mat.breather_membrane", Membrane, 2),
+        ("mat.paint", FacadeFinish, 1),
+        ("mat.timber_cladding", Cladding, 1),
+        ("mat.fibre_cement", Cladding, 1),
+        ("mat.zinc", Cladding, 1),
+        ("mat.terracotta", Cladding, 1),
+        ("mat.wood_panelling", InteriorLining, 1),
+        ("mat.slate", RoofCovering, 1),
+        ("mat.standing_seam", RoofCovering, 1),
+        ("mat.thatch", RoofCovering, 1),
+    ]
+};
 
 /// How a corner junction between two walls is resolved, when the user
 /// overrides the default.
@@ -706,4 +819,31 @@ fn encloses(outline: &[Point]) -> bool {
         })
         .sum();
     n >= 3 && twice.abs() >= 1.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_family_of_the_role_comes_first_then_every_other_once() {
+        let order: Vec<_> = MaterialFamily::of_role(LayerRole::AirGap)
+            .first_then_all()
+            .collect();
+        assert_eq!(order[0], MaterialFamily::Air);
+        assert_eq!(order[1], MaterialFamily::Masonry);
+        assert_eq!(order.len(), MaterialFamily::ALL.len());
+        assert!(MaterialFamily::ALL.iter().all(|f| order.contains(f)));
+    }
+
+    #[test]
+    fn the_starting_library_has_every_family_and_unique_names() {
+        for f in MaterialFamily::ALL {
+            assert!(STARTING_LIBRARY.iter().any(|m| m.1 == f), "{f:?}");
+        }
+        let mut names: Vec<_> = STARTING_LIBRARY.iter().map(|m| m.0).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), STARTING_LIBRARY.len());
+    }
 }

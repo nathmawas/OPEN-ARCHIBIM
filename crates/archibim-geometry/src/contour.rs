@@ -269,6 +269,7 @@ mod tests {
         p.insert_material(Material {
             id: material,
             name: String::new(),
+            family: archibim_model::MaterialFamily::Other,
             priority: 5,
         })?;
         let level = |offset| LevelRef {
