@@ -3,26 +3,26 @@ title: A wall is placed on its reference line, which stays put when the build-up
 status: proposed
 given: |
   The architect draws walls on a chosen reference line: the exterior face
-  (left of the drawing direction, outside when drawn clockwise), the axis,
+  (outside when drawn clockwise, unless the side is swapped), the centre,
   the interior face, or a face of the load-bearing layers (for example
   the outside face of the concrete, under the insulation).
 when: |
   The architect draws the wall, then changes its thickness or its build-up,
-  or joins two walls of different thickness on their axis.
+  or joins two walls of different thickness on their centre.
 expect:
   - The two points drawn are on the reference line; the faces are placed
     from it and from the build-up.
-  - On the axis, a wall 200 thick has 100 on each side of the line; made 300
+  - On the centre, a wall 200 thick has 100 on each side of the line; made 300
     thick, it has 150 on each side, and the line has not moved.
   - On the outside face of the load-bearing layers, the insulation and the
     render lie outside the line and the plaster inside.
   - Without load-bearing layers, the reference falls back on the face on
     its side.
-  - Two walls of different thickness drawn on their axis meet at a corner
+  - Two walls of different thickness drawn on their centre meet at a corner
     with no gap and no overlap.
   - The reference line is a parameter of the wall, changed in its palette
     like any other, and undone like any other change.
-  - An offset moves the reference line away from the points drawn, to the
-    right for a positive value, the wall keeping its build-up.
+  - An offset moves the reference line away from the points drawn, towards
+    the interior face for a positive value, the wall keeping its build-up.
   - Flipping a wall mirrors it about its reference line in one undo step;
     its openings keep their place along the wall.

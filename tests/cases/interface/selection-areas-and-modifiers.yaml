@@ -14,19 +14,26 @@ expect:
     the selection.
   - A click on an element selects it alone; a click on empty space empties
     the selection.
-  - Dragging from left to right draws a rectangle with a solid outline and
-    selects the elements lying wholly inside it. Dragging from right to
-    left draws it dashed and selects every element it touches.
+  - Dragging from left to right, from empty space, draws a rectangle with a
+    solid outline and selects the elements lying wholly inside it.
+    Dragging from right to left draws it dashed, in another tint, and
+    selects every element it touches. Inside and touched are judged on
+    the outline the element draws in plan (a wall's faces, not its
+    reference line), on the story shown; an area inside a slab's outline
+    touches the slab. Guides are caught only when shown.
   - The selection tool also selects by polygon (points clicked, closed on
     the first point or with Enter) and by lasso (a free line dragged and
     closed on release); they take the whole elements or the touched ones,
-    as chosen in the tool's settings.
+    as chosen in the tool's settings (touched by default).
   - Shift adds what is clicked or caught to the selection, Ctrl takes it
-    out, Alt inverts it (what was selected is taken out, the rest added).
+    out, Alt inverts it (what was selected is taken out, the rest added);
+    Ctrl and Shift together also invert, where the system keeps Alt.
     Example - one wall selected, Alt and a rectangle across it and its
     neighbours selects the neighbours without it.
   - With several elements selected, the properties show how many, and
-    Delete removes them all in one undo step.
+    Delete removes them all in one undo step, the windows and doors of a
+    deleted wall with it.
   - The model does not change; selecting is not undone.
   - Not yet - selecting in 3D; moving what is selected by dragging it;
-    keeping the selection across views.
+    keeping the selection across views; editing a shared parameter on all
+    the selected elements.

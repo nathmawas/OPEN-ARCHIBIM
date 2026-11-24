@@ -10,12 +10,15 @@ when: |
 expect:
   - The choice is one compact list - exterior face, centre, interior face,
     then the exterior face, centre and interior face of the load-bearing
-    layers. No left or right is named anywhere.
+    layers. No left or right is named for the wall's sides or reference
+    lines. A partition uses the same words.
   - Centre of the load-bearing layers puts the line in the middle of the
     concrete - 260 from the exterior face in this build-up.
   - Next to the list, a button swaps the side; in the tool's settings it
     applies to the next walls drawn - drawn anticlockwise, they still have
-    their exterior face outside. On a drawn wall it flips the wall, as
-    before, in one undo step.
+    their exterior face outside. The points clicked stay on the reference
+    line; a chain or a rectangle still closes its corners; the swap stays
+    on until switched off. On a drawn wall it flips the wall, as before,
+    in one undo step.
   - The preview shows the wall on the side it will be built.
   - Changing the build-up never moves the reference line.
