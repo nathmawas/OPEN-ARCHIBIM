@@ -17,6 +17,7 @@ the old one.
 | [0009](0009-placed-guides.md) | Guides placed by hand are project data, not building elements | Proposed |
 | [0010](0010-cuts-are-relations.md) | A cut is a relation kept in the project, not a new shape | Proposed |
 | [0011](0011-material-families.md) | Material families sort the list, never constrain a layer | Proposed |
+| [0012](0012-black-and-white-look.md) | A black and white interface, Arial, icons read by the interface | Proposed |
 
 ## Format
 

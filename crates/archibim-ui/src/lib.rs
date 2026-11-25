@@ -2,6 +2,7 @@
 //! commands; never changes the model directly.
 
 mod i18n;
+mod look;
 mod model_view;
 mod plan;
 mod properties;
@@ -22,6 +23,8 @@ use archibim_model::{
 use egui::{Key, Modifiers, Sense, Ui};
 
 pub use i18n::t;
+pub use look::style;
+use look::{icon_button, icon_row, icons};
 use model_view::ModelView;
 use plan::PlanView;
 use properties::fields;
@@ -102,8 +105,6 @@ pub enum Tool {
     /// Draws terrain mesh outlines.
     Mesh,
     /// Places guides to draw against.
-    // ponytail: no tool has an icon yet (ADR 0004); draw this one with the
-    // others when the tool bar gets its icons.
     Guide,
 }
 
@@ -591,34 +592,43 @@ impl Workspace {
         });
     }
 
-    /// The tools, in groups: selection, the elements of the model, guides.
-    // ponytail: labels only; icons come with the catalogue (ADR 0004).
+    /// The tools, in groups: selection, the elements of the model, guides;
+    /// each one its icon and its name.
     fn tools(&mut self, ui: &mut Ui) {
         let before = self.tool;
-        let groups: [&[(Tool, &str)]; 3] = [
-            &[(Tool::Select, "tool.select")],
+        let groups: [&[(Tool, &str, &str)]; 3] = [
+            &[(Tool::Select, "tool.select", icons::SELECT)],
             &[
-                (Tool::Wall, "tool.wall"),
-                (Tool::Column, "tool.column"),
-                (Tool::Beam, "tool.beam"),
-                (Tool::Slab, "tool.slab"),
-                (Tool::Roof, "tool.roof"),
-                (Tool::Stair, "tool.stair"),
-                (Tool::Opening, "tool.opening"),
-                (Tool::Mesh, "tool.mesh"),
+                (Tool::Wall, "tool.wall", icons::WALL),
+                (Tool::Column, "tool.column", icons::COLUMN),
+                (Tool::Beam, "tool.beam", icons::BEAM),
+                (Tool::Slab, "tool.slab", icons::SLAB),
+                (Tool::Roof, "tool.roof", icons::ROOF),
+                (Tool::Stair, "tool.stair", icons::STAIR),
+                (Tool::Opening, "tool.opening", icons::WINDOW),
+                (Tool::Mesh, "tool.mesh", icons::TERRAIN),
             ],
-            &[(Tool::Guide, "tool.guide")],
+            &[(Tool::Guide, "tool.guide", icons::GUIDE)],
         ];
+        ui.spacing_mut().item_spacing.y = 2.0;
         for (i, group) in groups.into_iter().enumerate() {
             if i > 0 {
                 ui.separator();
             }
-            for &(tool, key) in group {
-                ui.selectable_value(&mut self.tool, tool, t(key));
+            for &(tool, key, icon) in group {
+                if icon_row(ui, self.tool == tool, icon, t(key)).clicked() {
+                    self.tool = tool;
+                }
                 if tool == Tool::Opening && self.tool == Tool::Opening {
                     ui.indent("opening", |ui| {
-                        ui.selectable_value(&mut self.door, false, t("preset.window"));
-                        ui.selectable_value(&mut self.door, true, t("preset.door"));
+                        for (door, key, icon) in [
+                            (false, "preset.window", icons::WINDOW),
+                            (true, "preset.door", icons::DOOR),
+                        ] {
+                            if icon_row(ui, self.door == door, icon, t(key)).clicked() {
+                                self.door = door;
+                            }
+                        }
                     });
                 }
             }
@@ -629,32 +639,28 @@ impl Workspace {
     }
 
     /// The drawing aids, in a row: what the pointer snaps to, and the
-    /// points placed from others.
-    // ponytail: short words, the full one on hover; icons drawn to the
-    // catalogue rules (ADR 0004) replace them later.
+    /// points placed from others. Each aid is an icon, its name on hover.
     fn aids(&mut self, ui: &mut Ui) {
         let gap = || egui::Separator::default().spacing(4.0);
         ui.spacing_mut().item_spacing.x = 3.0;
         ui.strong(t("snap.title"));
         let o = &mut self.snap_options;
-        for (on, short, key) in [
-            (&mut o.points, "snap.points_short", "snap.points"),
-            (&mut o.midpoints, "snap.midpoints_short", "snap.midpoints"),
+        for (on, icon, key) in [
+            (&mut o.points, icons::SNAP_POINTS, "snap.points"),
+            (&mut o.midpoints, icons::SNAP_MIDPOINTS, "snap.midpoints"),
             (
                 &mut o.intersections,
-                "snap.intersections_short",
+                icons::SNAP_INTERSECTIONS,
                 "snap.intersections",
             ),
-            (&mut o.edges, "snap.edges_short", "snap.edges"),
-            (&mut o.angles, "snap.angles_short", "snap.angles"),
-            (
-                &mut o.alignments,
-                "snap.alignments_short",
-                "snap.alignments",
-            ),
-            (&mut o.guides, "snap.guides_short", "snap.guides"),
+            (&mut o.edges, icons::SNAP_EDGES, "snap.edges"),
+            (&mut o.angles, icons::SNAP_ANGLES, "snap.angles"),
+            (&mut o.alignments, icons::SNAP_ALIGNMENTS, "snap.alignments"),
+            (&mut o.guides, icons::SNAP_GUIDES, "snap.guides"),
         ] {
-            ui.toggle_value(on, t(short)).on_hover_text(t(key));
+            if icon_button(ui, *on, icon, t(key)).clicked() {
+                *on = !*on;
+            }
         }
         ui.add(gap());
         for (on, angle) in o.base_angles.iter_mut().zip(BASE_ANGLES) {
@@ -679,10 +685,13 @@ impl Workspace {
             ui.add(gap());
         }
         if self.tool != Tool::Select
-            && ui
-                .selectable_label(self.halfway.is_some(), t("snap.halfway_short"))
-                .on_hover_text(t("snap.halfway"))
-                .clicked()
+            && icon_button(
+                ui,
+                self.halfway.is_some(),
+                icons::SNAP_HALFWAY,
+                t("snap.halfway"),
+            )
+            .clicked()
         {
             self.halfway = match self.halfway {
                 Some(_) => None,
@@ -690,10 +699,13 @@ impl Workspace {
             };
         }
         if self.tool != Tool::Select
-            && ui
-                .selectable_label(self.reference.is_some(), t("snap.reference_short"))
-                .on_hover_text(t("snap.reference"))
-                .clicked()
+            && icon_button(
+                ui,
+                self.reference.is_some(),
+                icons::SNAP_REFERENCE,
+                t("snap.reference"),
+            )
+            .clicked()
         {
             self.ask_reference();
         }

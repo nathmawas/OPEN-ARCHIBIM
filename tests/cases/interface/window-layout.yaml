@@ -30,6 +30,6 @@ expect:
     both, fit to window, zoom out and in, the plan's approximate size on
     screen as "Screen 1:N" (not the drawing's scale), and the placed
     guides shown or hidden.
-  - Not yet - icons for the tools, a language menu (the language is chosen
+  - Not yet - a language menu (the language is chosen
     at launch), a renovation filter and layers shown or hidden in the
     display bar, the drawing's own scale.

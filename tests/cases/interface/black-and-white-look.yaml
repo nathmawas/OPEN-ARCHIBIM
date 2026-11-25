@@ -1,0 +1,27 @@
+id: black-and-white-look
+title: The interface is black on white like a drawing, in Arial, with an icon for each tool and each drawing aid
+status: proposed
+given: |
+  The application is open on the demonstration house, plan and 3D.
+when: |
+  The architect looks at the window, picks tools and switches drawing aids
+  on and off.
+expect:
+  - Panels, menus and buttons are white with black text and lines, with
+    square corners and no shadows. What is on - the tool in use, an aid
+    switched on, a chosen method - is black with white text or a white
+    icon.
+  - The text is in Arial when the system has it; otherwise a font of the
+    same widths, then the default one. The font is never shipped with the
+    application.
+  - Each tool shows its icon and its name; the window and door choice
+    under the opening tool shows theirs.
+  - Each drawing aid that is switched on or off shows its icon only, its
+    full name on hover; angles and divisions keep their values.
+  - Icons are thin black lines, one weight, drawn from the project's own
+    catalogue; they follow the colour of the button.
+  - The plan and the 3D view, which show the model, keep their own
+    colours; only the interface around them is black and white.
+  - Not yet - choosing the look or the font, icons only in the tool column,
+    how the model is shown (pens, line weights, fills), icons for the views
+    and the edit commands.

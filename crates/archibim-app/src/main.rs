@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         },
         Box::new(|cc| {
+            archibim_ui::style(&cc.egui_ctx);
             if let Some(state) = &cc.wgpu_render_state {
                 archibim_render::install(state);
             }
